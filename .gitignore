@@ -1,0 +1,29 @@
+# Your Takeout export — never commit this
+takeout*.zip
+*.zip
+!node_modules/**/*.zip
+
+# Extracted history
+takeout/
+**/watch-history.html
+**/search-history.html
+**/subscriptions.csv
+**/comments.csv
+
+# Generated from real data
+YOUR-REPORT.md
+!docs/YOUR-REPORT.md
+
+# Test artifacts
+test-data.zip
+test-*.html
+profile-dump.json
+test-profile.json
+
+# OS / editor
+.DS_Store
+Thumbs.db
+*.swp
+.idea/
+.vscode/
+node_modules/
