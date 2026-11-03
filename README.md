@@ -6,7 +6,10 @@ YouScope is a private, client-side analyzer for your Google Takeout YouTube expo
 
 Nothing is uploaded. No account, no server, no tracking. Your zip is unzipped in the tab and forgotten when you close it.
 
-**[→ Use it now](https://razzongit.github.io/youscope/)** — no install. Add your own API key there for the AI modes; hosted on https so browser calls work.
+**[→ Use it now](https://youscope.netlify.app/)** — no install, nothing to download.
+Add your own API key there for the AI modes; served over https so browser calls work.
+
+Also mirrored on GitHub Pages: https://razzongit.github.io/youscope/
 
 ---
 
@@ -208,6 +211,25 @@ Everything is synchronous-ish and single-pass; there's no worker thread, which k
 - Open `dist/index.html` with your network off and everything except the AI panel still works.
 
 ---
+
+## Deployment
+
+The app is one pre-built file. Two things matter when hosting it.
+
+**Publish `public/`, not the repo root.** The repo root contains a generated personal report, test fixtures and build scripts. `netlify.toml` sets `publish = "public"` so only `index.html` and `robots.txt` are ever served. Publishing the root would expose any file you happen to leave there — including a report built from real watch history.
+
+**Serve over https.** That is what makes BYO-key mode work; `file://` cannot call APIs.
+
+| Host | Setup |
+|---|---|
+| **Netlify** | Connected to this repo. Publish dir `public`, no build command (bundle is committed). |
+| **GitHub Pages** | Write the bundle to the repo root; Pages serves `/` from `main`. |
+| **Vercel** | Framework: none. Output dir: `public`. |
+| **Anything static** | Upload the contents of `public/`. |
+
+After editing anything in `engine/` or `web/`, run `node build.mjs` and commit the regenerated bundle — otherwise the host keeps serving the old one. To have Netlify rebuild instead, uncomment `command` in `netlify.toml`.
+
+Ollama on `http://localhost` cannot be reached from an https page (mixed content, independent of CSP). For local models, use `node serve.mjs` and run completely offline.
 
 ## Troubleshooting
 
