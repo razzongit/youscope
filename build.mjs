@@ -56,12 +56,21 @@ ${scripts.map(s => `<script>\n${read(s)}\n</script>`).join('\n')}
 </html>
 `;
 
-if (!existsSync(join(root, 'dist'))) mkdirSync(join(root, 'dist'));
-writeFileSync(join(root, 'dist/index.html'), html, 'utf8');
+// Emit to a dedicated public/ dir: that is what Netlify (and any static host)
+// publishes. Keeping the deploy root separate from the repo root means the
+// personal report, tests, and build scripts are never served as files.
+for (const dir of ['public', 'dist']) {
+  if (!existsSync(join(root, dir))) mkdirSync(join(root, dir));
+  writeFileSync(join(root, dir, 'index.html'), html, 'utf8');
+}
 
-// also emit a GitHub-Pages-ready copy at repo root as index.html
+// Root copy for GitHub Pages (branch publishing) and for opening locally.
 writeFileSync(join(root, 'index.html'), html, 'utf8');
 
+// robots.txt for the published site
+writeFileSync(join(root, 'public', 'robots.txt'), 'User-agent: *\nAllow: /\n', 'utf8');
+
 const kb = (html.length / 1024).toFixed(0);
-console.log(`✓ dist/index.html  ${kb} KB  (${scripts.length} scripts, 1 stylesheet inlined)`);
-console.log(`✓ index.html       same bundle, ready for GitHub Pages`);
+console.log(`✓ public/index.html  ${kb} KB  (${scripts.length} scripts + CSS inlined)`);
+console.log(`✓ dist/index.html    same bundle`);
+console.log(`✓ index.html         root copy (GitHub Pages / local open)`);

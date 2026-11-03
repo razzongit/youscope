@@ -1,0 +1,37 @@
+# Netlify configuration for YouScope — https://github.com/razzongit/youscope
+#
+# The app is ONE pre-built file. No dependencies, no build step, nothing to
+# install. `public/` contains only what should be publicly served.
+#
+# Publish root is public/ on purpose: the repo root holds a personal report,
+# test fixtures and build scripts that must never be reachable over HTTP.
+#
+# Editing engine/ or web/? Run `node build.mjs` and commit the regenerated
+# public/index.html — or uncomment `command` to have Netlify build it.
+
+[build]
+  publish = "public"
+  # command = "node build.mjs"
+
+# Deep links / refreshes resolve to the app.
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
+
+[[headers]]
+  for = "/*"
+  [headers.values]
+    # Watch history is processed in memory only — never let an edge cache it.
+    Cache-Control = "no-store, must-revalidate"
+    X-Content-Type-Options = "nosniff"
+    X-Frame-Options = "DENY"
+    Referrer-Policy = "no-referrer"
+    Permissions-Policy = "geolocation=(), microphone=(), camera=()"
+    # script-src needs 'unsafe-inline': the whole app is one inline script blob.
+    # connect-src is intentionally open — the user supplies their own API
+    # endpoint at runtime (OpenRouter, Gemini, Groq, self-hosted proxy).
+    #   Note: Ollama on http://localhost is blocked by browsers from an https
+    #   page (mixed content) regardless of CSP. Use `node serve.mjs` locally
+    #   for Ollama; the hosted site is for https API providers.
+    Content-Security-Policy = "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: blob:; connect-src *; base-uri 'self'; form-action 'none'; frame-ancestors 'none'"
