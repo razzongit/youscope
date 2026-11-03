@@ -17,6 +17,7 @@ const scripts = [
   'engine/analytics.js',
   'engine/correlations.js',
   'engine/insights.js',
+  'engine/openrouter.js',
   'engine/ai.js',
   'engine/deep.js',
   'engine/zip.js',

@@ -83,11 +83,26 @@ Because each call sees only one interest, prompts stay small (~1.5k tokens) and 
 
 | Provider | Cost | Notes |
 |---|---|---|
-| **OpenRouter** | **Free** | Any `:free` model. Best default. [Get a key](https://openrouter.ai/keys) |
+| **OpenRouter** | **Free** | Default. Uses `openrouter/free`. [Get a key](https://openrouter.ai/keys) |
 | **Google Gemini** | Free tier | Generous limits, OpenAI-compatible endpoint |
 | **Groq** | Free tier | Very fast |
 | **Ollama** | Free, local | Nothing leaves your machine, even in full mode |
 | **OpenAI** | Paid | `gpt-4o-mini` handles digest fine |
+
+#### Why `openrouter/free` is the default
+
+OpenRouter's free roster **changes constantly**. Names that were current when this was written (`llama-3.3-70b-instruct:free`, `deepseek-r1:free`) no longer exist — a hardcoded "best free model" breaks within weeks.
+
+`openrouter/free` is an auto-router: it picks among whatever free models are live. It cannot go stale, and it routes around a single provider being down.
+
+The app also:
+
+- **Checks capabilities per model.** Several free models reject `response_format`; sending it blindly fails. It is only sent where supported.
+- **Sends a fallback chain.** Requests go out with `models: [...]` so OpenRouter can try another free model if one is retired or saturated.
+- **Honours `Retry-After`.** A 429 tells the app how long to wait, and it waits exactly that long before one retry, rather than a guessed interval.
+- **Reads your limits first.** `GET /api/v1/key` after a successful test shows your remaining free requests today and any credit balance, so a 13-call run does not die halfway.
+
+Free tiers are gated **per minute and per day** (roughly 50/day without credits, `429` when exceeded). Full mode paces its calls deliberately because of this.
 
 The key lives in `localStorage` and requests go from your browser straight to the provider. There is no server, so there is nothing of ours to leak it.
 
@@ -137,6 +152,7 @@ youscope/
 │   ├── analytics.js      # all metrics
 │   ├── correlations.js   # cross-interest Pearson correlations + tensions
 │   ├── insights.js       # deterministic portrait writer + AI digest builder
+│   ├── openrouter.js     # free-model roster, capability gating, key limits
 │   ├── ai.js             # BYO-key OpenAI-compatible client
 │   └── deep.js           # full-personal map-reduce (per-interest → synthesis)
 ├── web/

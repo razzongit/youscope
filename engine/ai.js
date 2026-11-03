@@ -16,21 +16,20 @@
     openrouter: {
       label: 'OpenRouter',
       base: 'https://openrouter.ai/api/v1',
-      model: 'meta-llama/llama-3.3-70b-instruct:free',
+      // Auto-router: never 404s when a specific free model is retired.
+      model: 'openrouter/free',
       freeModels: [
-        'meta-llama/llama-3.3-70b-instruct:free',
-        'deepseek/deepseek-r1:free',
-        'deepseek/deepseek-chat-v3-0324:free',
-        'google/gemini-2.0-flash-exp:free',
-        'qwen/qwen-2.5-72b-instruct:free',
-        'mistralai/mistral-small-3.2-24b-instruct:free',
-        'nvidia/llama-3.1-nemotron-70b-instruct:free',
-        'microsoft/phi-4-reasoning:free',
-        'moonshotai/kimi-k2:free',
-        'z-ai/glm-4.5-air:free',
+        'openrouter/free',
+        'google/gemma-4-31b-it:free',
+        'dots-studio/dots-3-note-preview:free',
+        'xingchen-agi/xing4.0-29b-a4b:free',
+        'recursive/flint-v1.0:free',
+        'google/gemma-4-26b-a4b-it:free',
+        'nvidia/nemotron-3.5-super-vl:free',
+        'liquid/lfm-2.5-2.6b:free',
       ],
       keysUrl: 'https://openrouter.ai/keys',
-      note: 'Free models cost $0. You still need a free OpenRouter account and key.',
+      note: 'Free models cost $0. The list of free models changes often — "openrouter/free" always works because it routes automatically.',
     },
     openai: {
       label: 'OpenAI',
@@ -186,7 +185,30 @@ Reply with JSON only, matching this shape:
       temperature: opts.temperature !== undefined ? opts.temperature : 0.65,
       max_tokens: opts.maxTokens || 1600,
     };
-    if (opts.json) body.response_format = { type: 'json_object' };
+    // Only some models accept structured output. Sending it where it is
+    // unsupported is a hard error on OpenRouter, so gate it by capability.
+    const orMod = (typeof self !== 'undefined' && self.YSOR) || (typeof window !== 'undefined' && window.YSOR) || null;
+    // Provider-based, not URL-based: a proxied or self-hosted OpenRouter
+    // endpoint should behave identically. URL match is kept as a fallback.
+    const orMode = opts.openrouter !== undefined
+      ? opts.openrouter
+      : (cfg.provider === 'openrouter' || /openrouter\.ai/.test(base));
+    const isOpenRouter = !!orMode;
+    const wantsJson = !!opts.json;
+    let allowResponseFormat = wantsJson;
+    if (isOpenRouter && orMod) {
+      allowResponseFormat = orMod.modelSupportsJson(model);
+    }
+    if (allowResponseFormat) body.response_format = { type: 'json_object' };
+
+    // Let OpenRouter fall back automatically if the chosen free model is
+    // retired or rate-limited. Only sent when the caller did not pick a
+    // specific model explicitly.
+    if (isOpenRouter && opts.fallback !== false) {
+      const chain = (orMod && orMod.FALLBACK_CHAIN) || [];
+      const extras = chain.filter(m => m !== model);
+      if (extras.length) body.models = [model, ...extras];
+    }
 
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), opts.timeoutMs || 120000);
@@ -214,7 +236,19 @@ Reply with JSON only, matching this shape:
       catch (e) { detail = (await res.text().catch(() => '')).slice(0, 300); }
       if (res.status === 401) throw new Error('401 Unauthorized — the API key was rejected. ' + detail);
       if (res.status === 402) throw new Error('402 Payment required — this model is not free on your account. ' + detail);
-      if (res.status === 429) throw new Error('429 Rate limited — free models are busy. Wait a moment or pick a different model. ' + detail);
+      if (res.status === 429) {
+        let waitMs = null;
+        try { waitMs = orMod ? orMod.retryAfterMs(res.headers) : null; } catch (e) { waitMs = null; }
+        const waitTxt = waitMs ? ' Retry in ~' + Math.ceil(waitMs / 1000) + 's.' : '';
+        const err = new Error('429 Rate limited by OpenRouter.' + waitTxt +
+          ' Free models are capped per minute and per day — switch to "openrouter/free" or wait. ' + detail);
+        err.retryAfterMs = waitMs;
+        err.isRateLimit = true;
+        throw err;
+      }
+      if (res.status === 503 || res.status === 502) {
+        throw new Error('The upstream provider for this model is unavailable right now. Pick "openrouter/free" (it routes around outages) or try again shortly. ' + detail);
+      }
       if (res.status === 404) throw new Error('404 Model not found — check the model id. ' + detail);
       throw new Error('HTTP ' + res.status + ': ' + detail);
     }
@@ -267,6 +301,13 @@ Reply with JSON only, matching this shape:
     return parsed;
   }
 
+  /* Best-effort: read this key's limits so the UI can warn before a run. */
+  async function checkOpenRouterKey(apiKey) {
+    const orMod = (typeof self !== 'undefined' && self.YSOR) || (typeof window !== 'undefined' && window.YSOR) || null;
+    if (!orMod) return null;
+    return await orMod.checkKey(apiKey);
+  }
+
   function renderMarkdown(md) {
     // tiny, safe subset: **bold**, *italic*, `code`, line breaks
     const esc = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -276,5 +317,5 @@ Reply with JSON only, matching this shape:
       .replace(/`([^`]+)`/g, '<code style="font-family:var(--mono);font-size:.9em;opacity:.9">$1</code>');
   }
 
-  return { PRESETS, loadConfig, saveConfig, chat, analyze, extractJson, renderMarkdown, normalizeBase, isFileProtocol, getLocation };
+  return { PRESETS, loadConfig, saveConfig, chat, analyze, extractJson, renderMarkdown, normalizeBase, isFileProtocol, getLocation, checkOpenRouterKey, FREE_FALLBACKS: (typeof self !== "undefined" && self.YSOR && self.YSOR.FALLBACK_CHAIN) || [] };
 });

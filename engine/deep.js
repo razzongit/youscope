@@ -252,9 +252,12 @@ Rules:
         cat.error = e.message;
         cat.analysis = null;
         if (/429|rate limit/i.test(e.message)) {
-          // One patient retry: free tiers usually clear within a few seconds.
-          onStage('Rate limited — waiting 6s and retrying once');
-          await new Promise(r => setTimeout(r, 6000));
+          // Honour Retry-After when OpenRouter provides it; otherwise use a
+          // conservative default. Free models are capped per minute, so a
+          // short retry usually succeeds.
+          const waitMs = (e.retryAfterMs && e.retryAfterMs > 0) ? e.retryAfterMs : 6000;
+          onStage('Rate limited — waiting ' + Math.ceil(waitMs / 1000) + 's and retrying once');
+          await new Promise(r => setTimeout(r, waitMs));
           try {
             const res2 = await ai.chat(cfg, [
               { role: 'system', content: 'You are a precise behavioural analyst. Output JSON only.' },

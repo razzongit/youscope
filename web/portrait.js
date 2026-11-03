@@ -157,6 +157,7 @@
         <button class="btn ghost" data-f="test">Test connection</button>
         <span class="hint" data-f="hint">${esc(preset.note)}${preset.keysUrl ? ` · <a class="link" href="${esc(preset.keysUrl)}" target="_blank" rel="noopener">get a key</a>` : ''}</span>
       </div>
+      <div data-f="roster"></div>
       <div data-f="prog"></div>
       ${window.YSAI.isFileProtocol() ? `<div class="hint" style="margin-top:12px;padding:10px 12px;border-radius:8px;border:1px solid rgba(255,196,107,.32);background:rgba(255,196,107,.06);color:var(--amber);line-height:1.6">
         <b>You opened this from a file.</b> Browsers block API calls from <code style="font-family:var(--mono)">file://</code> pages — that is a security rule, not a bug in your key.
@@ -174,7 +175,36 @@
         (pr.keysUrl ? ` · <a class="link" href="${esc(pr.keysUrl)}" target="_blank" rel="noopener">get a key</a>` : '');
       q('[data-f="key"]').placeholder = pr.noKey ? 'not needed' : 'paste key';
       q('[data-f="base-wrap"]').style.display = (e.target.value === 'custom') ? '' : 'none';
+      renderRoster(e.target.value);
     });
+
+    // Show what the free roster actually is, straight from the shipped data.
+    function renderRoster(provider) {
+      const host = q('[data-f="roster"]');
+      if (!host) return;
+      if (provider !== 'openrouter' || !window.YSOR) { host.innerHTML = ''; return; }
+      const models = window.YSOR.FREE_MODELS || [];
+      host.innerHTML = `
+        <div style="margin-top:12px;padding:12px 14px;border:1px solid var(--line);border-radius:8px;background:rgba(255,255,255,.015)">
+          <div class="mono" style="font-size:.64rem;letter-spacing:.14em;text-transform:uppercase;color:var(--text-dim);margin-bottom:9px">
+            Free models that exist right now
+          </div>
+          <div class="list">
+            ${models.map(m => `
+              <div class="row" style="grid-template-columns:1fr auto;padding:5px 0;font-size:.78rem">
+                <span><code style="font-family:var(--mono);font-size:.72rem;color:var(--accent)">${esc(m.id)}</code>
+                  <span class="dim" style="margin-left:6px">${esc(m.note || '')}</span></span>
+                <span class="meta">${m.json ? 'JSON' : 'no JSON'}</span>
+              </div>`).join('')}
+          </div>
+          <div class="hint" style="margin-top:10px;line-height:1.6">
+            The free roster changes without notice — that is why the default is
+            <code style="font-family:var(--mono)">openrouter/free</code>, an auto-router that picks
+            from whatever is live. Leave the model field blank to use it.
+          </div>
+        </div>`;
+    }
+    renderRoster(presetId);
 
     // Read + validate the form. Returns {ok, cfg, error}.
     function readForm() {
@@ -241,6 +271,23 @@
           · resolved model <code style="font-family:var(--mono)">${esc(r.model || v.cfg.model)}</code></div>
         </div>`;
         window.YSAI.saveConfig(v.cfg);
+        // On OpenRouter, also report the key's real limits so a long run is safe.
+        if (v.cfg.provider === 'openrouter' && window.YSAI.checkOpenRouterKey) {
+          try {
+            const info = await window.YSAI.checkOpenRouterKey(v.cfg.apiKey, v.cfg.baseUrl);
+            if (info) {
+              const daily = info.freeModelDaily
+                ? `${info.freeModelDaily.remaining}/${info.freeModelDaily.limit} free requests left today`
+                : 'no free-model counter reported';
+              const tier = info.isFreeTier ? 'free tier' : 'credited account';
+              prog.innerHTML += `<div class="hint" style="margin-top:8px;padding:8px 12px;border-radius:8px;
+                  background:rgba(255,255,255,.03);border:1px solid var(--line)">
+                ${esc(tier)} · ${esc(daily)}${info.limitRemaining !== null && info.limitRemaining !== undefined
+                  ? ' · $' + Number(info.limitRemaining).toFixed(2) + ' credit left' : ''}
+              </div>`;
+            }
+          } catch (e2) { /* non-fatal */ }
+        }
       } catch (e) {
         prog.innerHTML = `<div class="state err" style="padding:14px;margin-top:12px">
           <div style="color:var(--coral);font-family:var(--mono);font-size:.76rem;letter-spacing:.06em;margin-bottom:8px">CONNECTION FAILED</div>
