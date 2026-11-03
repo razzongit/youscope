@@ -179,14 +179,6 @@ Reply with JSON only, matching this shape:
       headers['HTTP-Referer'] = origin;
       headers['X-Title'] = 'YouScope';
     }
-    const body = {
-      model,
-      messages,
-      temperature: opts.temperature !== undefined ? opts.temperature : 0.65,
-      max_tokens: opts.maxTokens || 1600,
-    };
-    // Only some models accept structured output. Sending it where it is
-    // unsupported is a hard error on OpenRouter, so gate it by capability.
     const orMod = (typeof self !== 'undefined' && self.YSOR) || (typeof window !== 'undefined' && window.YSOR) || null;
     // Provider-based, not URL-based: a proxied or self-hosted OpenRouter
     // endpoint should behave identically. URL match is kept as a fallback.
@@ -199,6 +191,27 @@ Reply with JSON only, matching this shape:
     if (isOpenRouter && orMod) {
       allowResponseFormat = orMod.modelSupportsJson(model);
     }
+
+    // Live testing: a 600-token budget was entirely consumed by hidden
+    // reasoning (600/600 on reasoning, content:null). 3000 worked — the model
+    // spent 877 reasoning then answered. So reasoning models need real headroom,
+    // and the auto-router can hand us one at any time.
+    let maxTokens = opts.maxTokens || 1600;
+    // Use the per-model floor measured against the live API: the auto-router
+    // may land on a model that needs 4500 tokens just to answer.
+    if (isOpenRouter && orMod && orMod.reasoningFloor) {
+      const floor = orMod.reasoningFloor(model);
+      if (floor > 0) maxTokens = Math.max(maxTokens, floor);
+    }
+
+    const body = {
+      model,
+      messages,
+      temperature: opts.temperature !== undefined ? opts.temperature : 0.65,
+      max_tokens: maxTokens,
+    };
+    // Only some models accept structured output. Sending it where it is
+    // unsupported is a hard error on OpenRouter, so gate it by capability.
     if (allowResponseFormat) body.response_format = { type: 'json_object' };
 
     // Let OpenRouter fall back automatically if the chosen free model is
@@ -207,7 +220,9 @@ Reply with JSON only, matching this shape:
     if (isOpenRouter && opts.fallback !== false) {
       const chain = (orMod && orMod.FALLBACK_CHAIN) || [];
       const extras = chain.filter(m => m !== model);
-      if (extras.length) body.models = [model, ...extras];
+      // OpenRouter rejects more than 3 entries in models[] (verified live: HTTP 400).
+      const fallbackList = [model, ...extras].slice(0, 3);
+      if (fallbackList.length > 1) body.models = fallbackList;
     }
 
     const ctrl = new AbortController();
@@ -253,9 +268,26 @@ Reply with JSON only, matching this shape:
       throw new Error('HTTP ' + res.status + ': ' + detail);
     }
     const json = await res.json();
-    const content = json.choices?.[0]?.message?.content;
-    if (!content) throw new Error('The provider returned an empty response.');
-    return { content, usage: json.usage || null, model: json.model || body.model };
+    const choice = json.choices?.[0] || {};
+    const content = choice.message?.content;
+    const reasoningTok = json.usage?.completion_tokens_details?.reasoning_tokens || 0;
+
+    if (!content) {
+      // The most common real cause: a reasoning model spent the entire token
+      // budget thinking and emitted nothing. Verified against live OpenRouter.
+      if (reasoningTok > 0 || choice.finish_reason === 'length') {
+        const err = new Error(
+          'The model ran out of tokens before writing an answer' +
+          (reasoningTok ? ' (' + reasoningTok + ' spent on internal reasoning)' : '') +
+          '. ' + (json.model ? 'Served: ' + json.model + '. ' : '') +
+          'Try "openrouter/free" again (it usually routes to a non-reasoning model) or pick Gemma 4 31B.');
+        err.isEmptyResponse = true;
+        throw err;
+      }
+      throw new Error('The provider returned an empty response' +
+        (json.model ? ' from ' + json.model : '') + '. Try a different model.');
+    }
+    return { content, usage: json.usage || null, model: json.model || body.model, reasoningTokens: reasoningTok };
   }
 
   function extractJson(text) {
