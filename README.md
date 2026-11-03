@@ -6,6 +6,8 @@ YouScope is a private, client-side analyzer for your Google Takeout YouTube expo
 
 Nothing is uploaded. No account, no server, no tracking. Your zip is unzipped in the tab and forgotten when you close it.
 
+**[→ Use it now](https://razzongit.github.io/youscope/)** — no install. Add your own API key there for the AI modes; hosted on https so browser calls work.
+
 ---
 
 ## Why this exists
@@ -28,7 +30,9 @@ YouScope answers the questions that data can actually answer:
 
 ### Use it
 
-**If you only want the analysis (no API key):** double-click `index.html`. Everything works offline.
+**Fastest path:** open **https://razzongit.github.io/youscope/** and drop your zip. Nothing to install.
+
+**Offline / local copy:** double-click `index.html`. Everything works, but API keys do not (see below).
 
 **If you want to use an AI key:** you must serve the folder over http. Browsers block `fetch` from `file://` pages — that is a security rule, not a bug in your key, and no provider can work around it.
 
