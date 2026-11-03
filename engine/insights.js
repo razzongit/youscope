@@ -19,6 +19,22 @@
     const out = { source: 'deterministic', generatedAt: new Date().toISOString(), sections: [] };
 
     const C = p.counts, R = p.range, A = p.activity;
+    // Guard: an empty or range-less profile must not render "January 1970".
+    if (!R.first || !R.last || !C.watchEvents) {
+      return {
+        source: 'deterministic',
+        generatedAt: new Date().toISOString(),
+        empty: true,
+        sections: [{
+          id: 'empty',
+          title: 'Not enough data',
+          body: 'This export did not contain any usable watch history. ' +
+                'Make sure you selected **YouTube and YouTube Music**, exported as **HTML**, ' +
+                'and that the archive includes a watch-history file.',
+        }],
+        headline: { topInterest: '—', topInterestShare: 0, persistentCount: 0, peakHour: 0 },
+      };
+    }
     const firstY = new Date(R.first).getUTCFullYear();
     const lastY = new Date(R.last).getUTCFullYear();
     const span = firstY === lastY ? String(firstY) : firstY + '–' + lastY;

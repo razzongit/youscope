@@ -1,0 +1,16 @@
+{
+  "name": "youscope",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Private, client-side analyzer for your YouTube Takeout history",
+  "type": "commonjs",
+  "scripts": {
+    "build": "node build.mjs",
+    "serve": "node serve.mjs",
+    "test": "node tests/file-protocol-test.js && node tests/ui-test.js",
+    "test:mock": "node tests/run-mock.js"
+  },
+  "devDependencies": {
+    "jsdom": "^24.0.0"
+  }
+}

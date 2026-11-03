@@ -230,10 +230,16 @@ Rules:
     let stoppedEarly = null;
     onStage('Analysing ' + samples.categories.length + ' interests from your actual videos');
 
-    // MAP: one call per category, small context each
+    // MAP: one call per category, small context each.
+    // Free tiers rate-limit hard (often 10-20 req/min), so space the calls out.
+    // The delay is configurable and skipped entirely for local endpoints.
+    const gap = hooks.delayMs !== undefined ? hooks.delayMs
+      : /localhost|127\.0\.0\.1|0\.0\.0\.0/.test(String(cfg.baseUrl || '')) ? 0
+      : 1200;
     for (let i = 0; i < samples.categories.length; i++) {
       const cat = samples.categories[i];
       onCategory(i + 1, samples.categories.length, cat.label);
+      if (i > 0 && gap > 0) await new Promise(r => setTimeout(r, gap));
       try {
         const res = await ai.chat(cfg, [
           { role: 'system', content: 'You are a precise behavioural analyst. Output JSON only.' },
@@ -245,9 +251,19 @@ Rules:
       } catch (e) {
         cat.error = e.message;
         cat.analysis = null;
-        // Rate limits on free tiers are common — stop rather than burn the quota
         if (/429|rate limit/i.test(e.message)) {
-          onStage('Rate limited — stopping early rather than burning your quota');
+          // One patient retry: free tiers usually clear within a few seconds.
+          onStage('Rate limited — waiting 6s and retrying once');
+          await new Promise(r => setTimeout(r, 6000));
+          try {
+            const res2 = await ai.chat(cfg, [
+              { role: 'system', content: 'You are a precise behavioural analyst. Output JSON only.' },
+              { role: 'user', content: categoryPrompt(cat, profile) },
+            ], { json: true, maxTokens: 700, temperature: 0.5 });
+            const p2 = ai.extractJson(res2.content);
+            if (p2) { cat.analysis = p2; cat.error = null; continue; }
+          } catch (e2) { /* fall through to stopping */ }
+          onStage('Still rate limited — stopping rather than burning your quota');
           stoppedEarly = { reason: 'rate-limit', at: i + 1, message: e.message };
           break;
         }

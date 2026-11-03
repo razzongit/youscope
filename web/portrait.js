@@ -303,6 +303,50 @@
     const X = window.YSTaxonomy;
     const C = window.YSCorrelations;
 
+    // Raw events are intentionally not persisted (sessionStorage holds aggregates
+    // only). After a refresh, Full mode has nothing to sample from — say so
+    // instead of silently producing an empty analysis.
+    const hasEvents = !!data && Array.isArray(data.watch) && data.watch.length > 0;
+    if (!hasEvents) {
+      const card = h('div', { class: 'card', style: 'border-color:rgba(255,196,107,.34);background:rgba(255,196,107,.05)' });
+      card.innerHTML = `
+        <div style="display:flex;gap:12px;align-items:flex-start">
+          <span style="font-size:1.3rem;line-height:1;color:var(--amber)">⚠</span>
+          <div>
+            <div style="font-family:var(--serif);font-size:1.15rem;margin-bottom:6px">Your videos are not in memory any more</div>
+            <div class="hint" style="color:var(--text-mid);line-height:1.65">
+              Full personal needs your individual video titles to analyse. Those are deliberately
+              <b>not</b> saved between page loads — only the statistics are kept, so a refresh
+              (or reopening the tab) discards them.
+              <br><br>Drop your zip again to use this mode. <b>Digest</b> still works right now,
+              because it only needs the statistics.
+            </div>
+          </div>
+        </div>`;
+      panel.appendChild(card);
+
+      // Still offer digest here rather than a dead end
+      const form = keyForm(ctx, async (cfg, btn, prog) => {
+        setBusy(btn, prog, 'thinking');
+        try {
+          const digest = window.YSInsights.buildDigest(ctx.profile);
+          const res = await window.YSAI.analyze(digest, cfg, (stage) => {
+            prog.innerHTML = `<div class="step" style="margin-top:10px">${esc(stage)}…</div>`;
+          });
+          prog.innerHTML = '';
+          out.innerHTML = '';
+          LAST = res;
+          renderAiPortrait(out, res);
+        } catch (e) {
+          showError(prog, e.message);
+        } finally {
+          setDone(btn, 'Generate portrait');
+        }
+      }, 'Run digest instead');
+      panel.appendChild(form);
+      return;
+    }
+
     // ── what will be sent: exact preview ──
     let preview = null;
     try {
