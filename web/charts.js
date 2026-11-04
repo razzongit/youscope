@@ -50,6 +50,8 @@
    */
   function areaChart(data, opts) {
     opts = opts || {};
+    // Guard: an empty series used to throw and take the entire view down.
+    if (!Array.isArray(data) || data.length === 0) return el('svg', { class: 'chart' });
     const W = opts.w || 900, H = opts.h || 220;
     const P = { t: 14, r: 12, b: 26, l: 42 };
     const iw = W - P.l - P.r, ih = H - P.t - P.b;
@@ -126,6 +128,7 @@
   /* ── horizontal bars ────────────────────────────────────────── */
   function barRows(items, opts) {
     opts = opts || {};
+    if (!Array.isArray(items) || items.length === 0) { const d = document.createElement("div"); d.className = "bars"; return d; }
     const wrap = document.createElement('div');
     wrap.className = 'bars';
     const max = Math.max(...items.map(i => i.count || i.value || 0), 1);
@@ -155,6 +158,7 @@
   /* ── calendar heatmap ───────────────────────────────────────── */
   function heatmap(dailyCounts, opts) {
     opts = opts || {};
+    if (!Array.isArray(dailyCounts) || dailyCounts.length === 0) { const g = document.createElement("div"); g.className = "heat"; return g; }
     const wrap = document.createElement('div');
     wrap.style.overflowX = 'auto';
     const grid = document.createElement('div');
@@ -198,6 +202,7 @@
   /* ── clock (polar hour ring) ────────────────────────────────── */
   function clockRing(hours, opts) {
     opts = opts || {};
+    if (!Array.isArray(hours) || hours.length < 24) return el("svg");
     const W = 300, H = 300, cx = 150, cy = 150;
     const max = Math.max(...hours, 1);
     const svg = el('svg', { class: 'chart chart-fixed', viewBox: `0 0 ${W} ${H}` });
@@ -238,6 +243,7 @@
   /* ── streamgraph (interest evolution) ───────────────────────── */
   function streamChart(quarters, trajectories, opts) {
     opts = opts || {};
+    if (!Array.isArray(quarters) || quarters.length === 0) return el("svg");
     const W = opts.w || 900, H = opts.h || 300;
     const P = { t: 12, r: 8, b: 24, l: 8 };
     const iw = W - P.l - P.r, ih = H - P.t - P.b;

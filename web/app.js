@@ -58,16 +58,48 @@
       </div>`;
   }
 
-  const VIEWS = [
-    { id: 'overview', label: 'Overview', kbd: '1' },
-    { id: 'interests', label: 'Interests', kbd: '2' },
-    { id: 'evolution', label: 'Evolution', kbd: '3' },
-    { id: 'rhythm', label: 'Rhythm', kbd: '4' },
-    { id: 'channels', label: 'Channels', kbd: '5' },
-    { id: 'music', label: 'Music', kbd: '6' },
-    { id: 'search', label: 'Searches', kbd: '7' },
-    { id: 'portrait', label: 'Portrait', kbd: '8' },
+  /* Base views are fixed; when the model has produced its own sections they are
+   * appended as navigable pages, so navigation is partly authored by the
+   * analysis rather than only by this file. */
+  const BASE_VIEWS = [
+    { id: 'overview', label: 'Overview' },
+    { id: 'interests', label: 'Interests' },
+    { id: 'evolution', label: 'Evolution' },
+    { id: 'rhythm', label: 'Rhythm' },
+    { id: 'channels', label: 'Channels' },
+    { id: 'music', label: 'Music' },
+    { id: 'search', label: 'Searches' },
+    { id: 'portrait', label: 'Portrait' },
+    { id: 'settings', label: 'Settings' },
   ];
+
+  function currentViews() {
+    const views = BASE_VIEWS.slice();
+    const pers = S.personalized;
+    if (pers && pers.sections && pers.sections.length) {
+      const at = views.findIndex((v) => v.id === 'portrait');
+      const extra = pers.sections.map((sec, i) => ({
+        id: 'story' + i, label: shortLabel(sec.title), isStory: true, index: i,
+      }));
+      views.splice(at < 0 ? views.length : at, 0, ...extra);
+    }
+    return views.map((v, i) => ({ ...v, kbd: String(i + 1) }));
+  }
+
+  /* Nav labels must be short; the model writes full sentences. */
+  function shortLabel(title) {
+    const t = String(title || '').replace(/[?:.]+$/, '').trim();
+    if (t.length <= 22) return t;
+    const words = t.split(/\s+/);
+    let out = '';
+    for (const w of words) {
+      if ((out + ' ' + w).trim().length > 22) break;
+      out = (out + ' ' + w).trim();
+    }
+    return (out || words[0].slice(0, 22)) + '…';
+  }
+
+  let VIEWS = BASE_VIEWS;   // base list, kept for compatibility
 
   function navHTML(active) {
     const icons = {
@@ -79,11 +111,12 @@
       music: '<path d="M9 18V6l10-2v12"/><circle cx="7" cy="18" r="2"/><circle cx="17" cy="16" r="2"/>',
       search: '<circle cx="11" cy="11" r="7"/><path d="M16 16l4 4"/>',
       portrait: '<path d="M12 3a4 4 0 100 8 4 4 0 000-8zM4 21c0-4 4-6 8-6s8 2 8 6"/>',
+      story: '<path d="M4 5h16M4 12h16M4 19h9"/>',
       settings: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 00.3 1.9l.1.1a2 2 0 11-2.8 2.8l-.1-.1a1.7 1.7 0 00-1.9-.3 1.7 1.7 0 00-1 1.5V21a2 2 0 11-4 0v-.1a1.7 1.7 0 00-1.1-1.5 1.7 1.7 0 00-1.9.3l-.1.1a2 2 0 11-2.8-2.8l.1-.1a1.7 1.7 0 00.3-1.9 1.7 1.7 0 00-1.5-1H3a2 2 0 110-4h.1a1.7 1.7 0 001.5-1.1 1.7 1.7 0 00-.3-1.9l-.1-.1a2 2 0 112.8-2.8l.1.1a1.7 1.7 0 001.9.3H9a1.7 1.7 0 001-1.5V3a2 2 0 114 0v.1a1.7 1.7 0 001 1.5 1.7 1.7 0 001.9-.3l.1-.1a2 2 0 112.8 2.8l-.1.1a1.7 1.7 0 00-.3 1.9V9a1.7 1.7 0 001.5 1H21a2 2 0 110 4h-.1a1.7 1.7 0 00-1.5 1z"/>',
     };
-    return VIEWS.map(v => `<a href="#${v.id}" data-view="${v.id}" class="${active === v.id ? 'active' : ''}">
-      <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">${icons[v.id]}</svg>
-      ${v.label}<span class="kbd">${v.kbd}</span></a>`).join('');
+    return currentViews().map(v => `<a href="#${v.id}" data-view="${v.id}" class="${active === v.id ? 'active' : ''}">
+      <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">${icons[v.isStory ? 'story' : v.id] || icons.overview}</svg>
+      ${esc(v.label)}${v.isStory ? '<span class="kbd" style="color:var(--accent)">story</span>' : `<span class="kbd">${v.kbd}</span>`}</a>`).join('');
   }
 
   function mount(active) {
@@ -374,6 +407,10 @@
     $$('#nav a').forEach(a => a.addEventListener('click', (e) => { e.preventDefault(); location.hash = a.dataset.view; }));
     $('#btn-reset').addEventListener('click', resetAll);
 
+    if (id.startsWith('story')) {
+      const idx = Number(id.slice(5));
+      return viewStory(m, S.personalized && S.personalized.sections[idx], idx);
+    }
     const views = { overview: viewOverview, interests: viewInterests, evolution: viewEvolution,
       rhythm: viewRhythm, channels: viewChannels, music: viewMusic, search: viewSearch,
       portrait: viewPortrait, settings: viewSettings };
@@ -413,6 +450,22 @@
 
     const wrap = h('div');
     m.appendChild(wrap);
+
+    // When the model has written a headline, it leads — that is the conclusion,
+    // and the KPIs below are the evidence for it.
+    if (S.personalized && S.personalized.headline) {
+      const lede = h('div', { class: 'card reveal', style: 'margin-bottom:16px;border-color:rgba(125,255,179,.28)' });
+      lede.innerHTML = `
+        <div style="font-family:var(--serif);font-size:clamp(1.25rem,2.4vw,1.75rem);line-height:1.3;letter-spacing:-.01em">
+          ${esc(S.personalized.headline)}
+        </div>
+        ${S.personalized.noticed ? `<div class="hint" style="margin-top:10px">${esc(S.personalized.noticed)}</div>` : ''}
+        <div class="tags" style="margin-top:14px">
+          ${(S.personalized.sections || []).slice(0, 4).map((sec, i) =>
+            `<a class="tag hot" href="#story${i}" style="text-decoration:none">${esc(shortLabel(sec.title))}</a>`).join('')}
+        </div>`;
+      wrap.appendChild(lede);
+    }
 
     // KPI row
     const kpis = h('div', { class: 'grid g-4 reveal' });
@@ -825,6 +878,17 @@
         taxonomyNames: personalized.taxonomy.map((t) => t.name),
       };
       S.personalized = personalized;
+      // Rebuild navigation immediately: the model's sections become pages.
+      const nav = $('#nav');
+      if (nav) {
+        const current = (location.hash || '#overview').slice(1) || 'overview';
+        nav.innerHTML = navHTML(current);
+        $$('#nav a').forEach((a) => a.addEventListener('click', (e) => {
+          e.preventDefault();
+          if (!S.profile && a.dataset.view !== 'settings') return;
+          location.hash = a.dataset.view;
+        }));
+      }
       try {
         sessionStorage.setItem('youscope.aiProfile', JSON.stringify({
           aiProfile: S.aiProfile,
@@ -890,6 +954,59 @@
     });
   }
 
+  /* ── STORY (one of the model's own sections, as a full page) ── */
+  function viewStory(m, section, idx) {
+    if (!section) {
+      m.innerHTML = topbar('Not available', 'YouScope', []);
+      m.appendChild(h('div', { class: 'card' }, '<p class="narr">This section is no longer in memory. Re-run the personalised analysis.</p>'));
+      return;
+    }
+    m.innerHTML = topbar(section.title, 'YouScope · ' + (S.mode === 'ai' ? 'your report' : 'report'), [
+      { text: 'section ' + (idx + 1) + ' of ' + ((S.personalized.sections || []).length), cls: 'good' },
+      ...(section.cites && section.cites.length ? [{ text: section.cites.slice(0, 2).join(', ') }] : []),
+    ]);
+
+    const card = h('div', { class: 'card' });
+    const ctx = {
+      profile: S.aiProfile || S.profile,
+      facts: S.facts,
+      taxonomyGroups: (S.personalized && S.personalized.taxonomy) || [],
+      body: section.body,
+    };
+    if (window.YSBlocks) {
+      card.appendChild(window.YSBlocks.renderSection(section, ctx));
+    } else {
+      card.appendChild(h('p', { class: 'narr' }, esc(section.body)));
+    }
+    m.appendChild(card);
+
+    if (section.cites && section.cites.length) {
+      m.appendChild(h('div', { class: 'hint', style: 'margin-top:12px' },
+        'This section rests on: ' + esc(section.cites.join(', '))));
+    }
+
+    // prev / next between the model's sections
+    const nav = h('div', { style: 'display:flex;gap:10px;margin-top:18px;flex-wrap:wrap' });
+    const total = (S.personalized.sections || []).length;
+    if (idx > 0) {
+      nav.appendChild(h('button', {
+        class: 'btn ghost sm',
+        onclick: () => { location.hash = '#story' + (idx - 1); },
+      }, '← ' + shortLabel(S.personalized.sections[idx - 1].title)));
+    }
+    if (idx < total - 1) {
+      nav.appendChild(h('button', {
+        class: 'btn sm',
+        onclick: () => { location.hash = '#story' + (idx + 1); },
+      }, shortLabel(S.personalized.sections[idx + 1].title) + ' →'));
+    }
+    if (nav.children.length) m.appendChild(nav);
+
+    // a way back to the whole portrait
+    m.appendChild(h('div', { style: 'margin-top:16px' },
+      '<a class="link" href="#portrait" style="font-size:.85rem">See the full portrait →</a>'));
+  }
+
   /* ── SETTINGS ── */
   function viewSettings(m, p) {
     window.YSsettings.render(m, () => {});
@@ -941,7 +1058,7 @@
         if (id === 'settings') return renderView('settings');
         return;
       }
-      if (VIEWS.some(v => v.id === id)) renderView(id);
+      if (currentViews().some(v => v.id === id)) renderView(id);
     });
 
     document.addEventListener('keydown', (e) => {
