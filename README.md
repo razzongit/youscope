@@ -81,9 +81,21 @@ Don't unzip it. YouScope reads the `.zip` directly, including Google's ZIP64 for
 
 ## Using your own model
 
-**In the app:** Settings → pick a provider → paste your key → Save and test. Saved to `config.json` on this machine, readable only by you.
+There are two config files and **either one works for both interfaces**:
 
-**For the CLI:** copy `.env.example` to `.env` and fill in three values — base URL, model id, and your key.
+| File | Written by | Used by |
+|---|---|---|
+| `config.json` | the app's Settings page | app **and** CLI |
+| `.env` | you, by hand | CLI **and** app |
+
+The server layers them: any non-empty value in `config.json` wins, and `.env`
+fills the rest. So if you already filled in `.env`, the app picks it up with no
+extra steps — and if you use the Settings page, the CLI uses that.
+
+**In the app:** Settings → pick a provider → paste your key → Save and test.
+
+**By hand:** copy `.env.example` to `.env` and fill in base URL, model, and key.
+Both files are gitignored and readable only by you.
 
 Either way, **any OpenAI-compatible endpoint works.** The tool never hardcodes a provider.
 

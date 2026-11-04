@@ -52,37 +52,70 @@ const DEFAULT_CONFIG = {
   extraHeaders: {},
 };
 
-async function readConfig() {
+/* Parse .env into a plain object. Used as a fallback so a user who filled in
+ * .env (the CLI's config) does not have to enter everything twice. */
+async function readEnvFile() {
   try {
-    const raw = JSON.parse(await readFile(CONFIG_PATH, 'utf8'));
-    return { ...DEFAULT_CONFIG, ...raw };
-  } catch {
-    // Seed from .env if it exists and config.json does not.
-    try {
-      const envRaw = await readFile(join(ROOT, '.env'), 'utf8');
-      const env = {};
-      for (const line of envRaw.split('\n')) {
-        const t = line.trim();
-        if (!t || t.startsWith('#')) continue;
-        const eq = t.indexOf('=');
-        if (eq < 0) continue;
-        env[t.slice(0, eq).trim()] = t.slice(eq + 1).trim();
+    const raw = await readFile(join(ROOT, '.env'), 'utf8');
+    const env = {};
+    for (const line of raw.split('\n')) {
+      const t = line.trim();
+      if (!t || t.startsWith('#')) continue;
+      const eq = t.indexOf('=');
+      if (eq < 0) continue;
+      let v = t.slice(eq + 1).trim();
+      if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) {
+        v = v.slice(1, -1);
       }
-      if (env.BASE_URL || env.MODEL || env.API_KEY) {
-        const seeded = {
-          ...DEFAULT_CONFIG,
-          baseUrl: env.BASE_URL || '',
-          model: env.MODEL || '',
-          apiKey: env.API_KEY || '',
-          maxTokens: Number(env.MAX_TOKENS) || DEFAULT_CONFIG.maxTokens,
-          temperature: env.TEMPERATURE !== undefined ? Number(env.TEMPERATURE) : DEFAULT_CONFIG.temperature,
-        };
-        await writeConfig(seeded);
-        return seeded;
-      }
-    } catch { /* no .env either */ }
-    return { ...DEFAULT_CONFIG };
+      env[t.slice(0, eq).trim()] = v;
+    }
+    return env;
+  } catch { return {}; }
+}
+
+/* .env → config shape. Any field the user set there becomes the default. */
+function configFromEnv(env) {
+  const c = {};
+  if (env.BASE_URL) c.baseUrl = env.BASE_URL;
+  if (env.MODEL) c.model = env.MODEL;
+  if (env.API_KEY) c.apiKey = env.API_KEY;
+  if (env.MAX_TOKENS) c.maxTokens = Number(env.MAX_TOKENS);
+  if (env.TEMPERATURE !== undefined && env.TEMPERATURE !== '') c.temperature = Number(env.TEMPERATURE);
+  if (env.TIMEOUT_MS) c.timeoutMs = Number(env.TIMEOUT_MS);
+  if (env.REQUEST_DELAY_MS) c.requestDelayMs = Number(env.REQUEST_DELAY_MS);
+  if (env.PROVIDER) c.provider = env.PROVIDER;
+  if (env.EXTRA_HEADERS) {
+    try { c.extraHeaders = JSON.parse(env.EXTRA_HEADERS); } catch { /* ignore */ }
   }
+  return c;
+}
+
+/* Layered config, most specific first:
+ *   config.json  (written by the Settings UI)
+ *   .env         (written by the user for the CLI)
+ *   defaults
+ * A field present in config.json always wins; .env fills the gaps. This means
+ * filling in either file works, and Settings changes still take effect. */
+async function readConfig() {
+  let fileCfg = null;
+  try {
+    fileCfg = JSON.parse(await readFile(CONFIG_PATH, 'utf8'));
+  } catch { /* no config.json yet */ }
+
+  const env = await readEnvFile();
+  const fromEnv = configFromEnv(env);
+
+  if (!fileCfg) {
+    return { ...DEFAULT_CONFIG, ...fromEnv };
+  }
+
+  const merged = { ...DEFAULT_CONFIG, ...fromEnv };
+  for (const [k, v] of Object.entries(fileCfg)) {
+    // Treat empty strings in config.json as "not set" so .env can supply them.
+    if (v === '' || v === null || v === undefined) continue;
+    merged[k] = v;
+  }
+  return merged;
 }
 
 async function writeConfig(cfg) {
