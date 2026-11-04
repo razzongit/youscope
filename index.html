@@ -4387,13 +4387,13 @@ Rules:
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
   const md = (s) => window.YSAI.renderMarkdown(String(s || ''));
 
-  let MODE = 'builtin';        // builtin | digest | full
+  let MODE = 'personal';        // builtin | digest | full
   let LAST = null;             // last AI result
   let FULL = null;             // last full analysis (kept in memory)
 
   function render(container, ctx) {
     const { profile: p, data, insights, aiCfg } = ctx;
-    MODE = 'builtin';
+    MODE = 'personal';
     LAST = null;
 
     container.innerHTML = '';
@@ -4409,18 +4409,23 @@ Rules:
       {
         id: 'builtin', name: 'Built-in', cost: 'free · no key', icon: '◐',
         desc: 'Written from the numbers on your device. Nothing leaves the browser.',
-        detail: '5 sections · your categories, hours, trajectories',
+        detail: '5 sections · fixed categories, hours, trajectories',
+      },
+      {
+        id: 'personal', name: 'Personalised', cost: '≈5 API calls', icon: '●',
+        desc: 'The model names your interest groups from your own vocabulary and decides what is worth reporting.',
+        detail: 'No preset categories · no template sections · every fact cited',
+        badge: 'recommended',
       },
       {
         id: 'digest', name: 'Digest', cost: '1 API call', icon: '◑',
         desc: 'A model reads the summary statistics and writes the portrait.',
-        detail: '5 sections · aggregates only · no video titles',
+        detail: '5 fixed sections · aggregates only',
       },
       {
-        id: 'full', name: 'Full personal', cost: '≈13 API calls', icon: '●',
-        desc: 'Each of your interests is analysed from the videos you actually watched, then synthesised.',
-        detail: 'Per-interest subthemes · cross-interest correlations · blind spots',
-        badge: 'deepest',
+        id: 'full', name: 'Deep dive', cost: '≈13 API calls', icon: '◎',
+        desc: 'Each of your fixed categories is analysed from the videos you watched, then synthesised.',
+        detail: 'Per-category subthemes · correlations · slower',
       },
     ];
     T.forEach(t => {
@@ -4454,7 +4459,7 @@ Rules:
 
     // built-in shows immediately
     renderBuiltin(out, insights);
-    selectTier('builtin', container, ctx, true);
+    selectTier('personal', container, ctx, true);
   }
 
   function selectTier(id, container, ctx, silent) {
@@ -4470,6 +4475,7 @@ Rules:
       if (!silent) { out.innerHTML = ''; renderBuiltin(out, ctx.insights); }
       return;
     }
+    if (id === 'personal') { out.innerHTML = ''; renderPersonalPanel(panel, out, ctx); return; }
     if (id === 'digest') { out.innerHTML = ''; renderDigestPanel(panel, out, ctx); return; }
     if (id === 'full') { out.innerHTML = ''; renderFullPanel(panel, out, ctx); return; }
   }
@@ -4679,6 +4685,156 @@ Rules:
     prog.innerHTML = `<div class="state err" style="padding:14px;margin-top:12px">
       <h3 style="font-size:.95rem">${esc(String(msg).split('—')[0] || 'Failed')}</h3>
       <p class="muted" style="font-size:.8rem">${esc(msg)}</p></div>`;
+  }
+
+  /* ───────────────── personalised (no hardcoded categories) ───────────────── */
+  function renderPersonalPanel(panel, out, ctx) {
+    const data = ctx.data;
+    const hasEvents = !!data && Array.isArray(data.watch) && data.watch.length > 0;
+
+    if (!hasEvents) {
+      panel.appendChild(h('div', {
+        class: 'card', style: 'border-color:rgba(255,196,107,.34);background:rgba(255,196,107,.05)',
+      }, `<div style="display:flex;gap:12px;align-items:flex-start">
+        <span style="font-size:1.3rem;line-height:1;color:var(--amber)">!</span>
+        <div>
+          <div style="font-family:var(--serif);font-size:1.2rem;margin-bottom:6px">Drop your zip again</div>
+          <div class="hint" style="color:var(--text-mid);line-height:1.65">
+            This mode clusters your individual videos, and those are deliberately not kept
+            between page loads. Re-open your zip and the analysis will already be here.
+          </div>
+        </div></div>`));
+      return;
+    }
+
+    // local preview of the clusters — free, instant, before any API call
+    let clustered = null, facts = null;
+    try {
+      const tz = ctx.profile.timezone && ctx.profile.timezone.offsetMin || 0;
+      facts = window.YSFacts.build(data, { tzOffsetMin: tz });
+      if (facts) facts.eras = window.YSFacts.eras(facts, data.watch);
+      clustered = window.YSCluster.build(data.watch, { maxClusters: 18 });
+    } catch (e) { /* surfaced below */ }
+
+    if (!clustered || !clustered.clusters.length) {
+      panel.appendChild(h('div', { class: 'card' },
+        `<div class="hint">Could not cluster this history — it may be too small. Try Digest instead.</div>`));
+      return;
+    }
+
+    const info = h('div', { class: 'card', style: 'border-color:rgba(125,255,179,.2)' });
+    info.innerHTML = `
+      <div class="card-head"><h3>What it will do</h3><span class="sub">free until you press the button</span></div>
+      <div class="hint" style="line-height:1.75;color:var(--text-mid)">
+        Your viewing was grouped into <b>${clustered.clusters.length} clusters</b> by shared vocabulary —
+        no preset categories, nothing named yet. The model will name these in <em>your</em> words,
+        then choose what is worth saying and write it.
+        <br><br>
+        <b style="color:var(--accent)">Sends:</b> cluster vocabulary, example titles, and the computed fact sheet.
+        Roughly 5 calls.
+      </div>`;
+
+    const list = h('div', { class: 'list', style: 'margin-top:14px' });
+    clustered.clusters.slice(0, 10).forEach((c) => {
+      list.appendChild(h('div', {
+        class: 'row', style: 'grid-template-columns:1fr auto;gap:12px;padding:7px 0',
+      }, `<span style="font-size:.82rem"><b>${esc(c.terms.slice(0, 5).join(', '))}</b>
+            <span class="dim" style="margin-left:6px">${esc(c.channels.slice(0, 3).join(', '))}</span></span>
+          <span class="meta">${c.count}</span>`));
+    });
+    info.appendChild(list);
+    if (clustered.clusters.length > 10) {
+      info.appendChild(h('div', { class: 'hint', style: 'margin-top:8px' },
+        `…and ${clustered.clusters.length - 10} more clusters.`));
+    }
+    if (facts) {
+      info.appendChild(h('div', { class: 'hint', style: 'margin-top:14px;padding-top:12px;border-top:1px solid var(--line);line-height:1.7' },
+        `${facts.totalWatched.toLocaleString()} watches · ${facts.channels.toLocaleString()} channels · ` +
+        `${facts.eras.length} eras detected · ${facts.longReturns.length} channels returned after long gaps · ` +
+        `${facts.abandoned.length} went quiet`));
+    }
+    panel.appendChild(info);
+
+    const form = keyForm(ctx, async (cfg, btn, prog) => {
+      setBusy(btn, prog, 'starting');
+      out.innerHTML = '';
+
+      const live = h('div', { class: 'card', style: 'margin-top:16px' });
+      live.innerHTML = `
+        <div class="card-head"><h3>Working</h3><span class="sub" id="p-stage">starting…</span></div>
+        <div class="bar" style="margin-bottom:14px"><i id="p-bar" style="width:3%"></i></div>
+        <div class="list" id="p-list"></div>`;
+      out.appendChild(live);
+      const stageEl = live.querySelector('#p-stage');
+      const barEl = live.querySelector('#p-bar');
+      const listEl = live.querySelector('#p-list');
+
+      try {
+        const result = await window.YSPersonalize.run(facts, clustered.clusters, cfg, {
+          delayMs: 300,
+          onStage: (s) => {
+            stageEl.textContent = s;
+            listEl.appendChild(h('div', { class: 'hint', style: 'padding:3px 0' }, '→ ' + esc(s)));
+            barEl.style.width = Math.min(95, 10 + listEl.children.length * 18) + '%';
+          },
+        });
+        barEl.style.width = '100%';
+        stageEl.textContent = 'done';
+        const done = h('div', { style: 'margin-top:16px' });
+        renderPersonalResult(done, result);
+        out.appendChild(done);
+      } catch (e) {
+        showError(prog, e.message);
+        if (!listEl.children.length) live.remove();
+      } finally {
+        setDone(btn, 'Run personalised analysis');
+      }
+    }, 'Run personalised analysis');
+    panel.appendChild(form);
+  }
+
+  function renderPersonalResult(container, res) {
+    if (res.headline) {
+      container.appendChild(h('div', { class: 'card' },
+        `<div style="font-family:var(--serif);font-size:1.5rem;line-height:1.3;letter-spacing:-.01em">
+          ${esc(res.headline)}</div>
+         ${res.noticed ? `<div class="hint" style="margin-top:12px">${esc(res.noticed)}</div>` : ''}`));
+    }
+
+    const tax = h('div', { class: 'card', style: 'margin-top:14px' });
+    tax.appendChild(h('div', { class: 'card-head' },
+      `<h3>Your interests, in your own terms</h3><span class="sub">named from your vocabulary</span>`));
+    res.taxonomy.forEach((t) => {
+      const row = h('div', { style: 'padding:11px 0;border-bottom:1px solid var(--line)' });
+      row.innerHTML = `
+        <div style="display:flex;align-items:baseline;gap:10px">
+          <strong style="font-size:.95rem">${esc(t.name)}</strong>
+          <span class="mono" style="margin-left:auto;font-size:.75rem;color:var(--accent)">${t.share}%</span>
+        </div>
+        <div class="hint" style="margin-top:5px;line-height:1.6">${esc(t.definition || '')}</div>
+        ${t.channels.length ? `<div class="tags" style="margin-top:7px">${t.channels.slice(0, 4)
+          .map(c => `<span class="tag">${esc(c)}</span>`).join('')}</div>` : ''}`;
+      tax.appendChild(row);
+    });
+    container.appendChild(tax);
+
+    res.sections.forEach((s) => {
+      container.appendChild(h('div', { class: 'card', style: 'margin-top:14px' },
+        `<div class="eyebrow" style="margin-bottom:8px">${esc(s.title)}</div>
+         <p class="narr">${esc(s.body)}</p>
+         ${s.cites && s.cites.length ? `<div class="hint" style="margin-top:10px;opacity:.6">evidence: ${esc(s.cites.join(', '))}</div>` : ''}`));
+    });
+
+    if (res.failedSections && res.failedSections.length) {
+      container.appendChild(h('div', { class: 'hint', style: 'margin-top:12px;color:var(--amber)' },
+        `${res.failedSections.length} section(s) could not be written: ` +
+        res.failedSections.map(f => esc(f.title)).join(', ')));
+    }
+    if (res.skipped) {
+      container.appendChild(h('div', { class: 'card', style: 'margin-top:14px' },
+        `<div class="card-head"><h3>What this report chose not to say</h3></div>
+         <p class="narr">${esc(res.skipped)}</p>`));
+    }
   }
 
   /* ───────────────── digest ───────────────── */

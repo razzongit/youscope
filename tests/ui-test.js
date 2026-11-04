@@ -33,8 +33,10 @@ function check(name, cond, detail) {
 
 (async () => {
   console.log('\n1. TIER UI RENDERS');
-  check('three tiers present', $$('.tier').length === 3);
-  check('built-in selected by default', $('.tier[data-tier="builtin"]').classList.contains('on'));
+  check('four tiers present', $$('.tier').length === 4, $$('.tier').length + ' tiers');
+  check('personalised is the default', $('.tier[data-tier="personal"]').classList.contains('on'));
+  check('built-in still available', !!$('.tier[data-tier="builtin"]'));
+  check('digest still available', !!$('.tier[data-tier="digest"]'));
 
   console.log('\n2. SWITCH TO DIGEST');
   $('.tier[data-tier="digest"]').dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
