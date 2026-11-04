@@ -341,13 +341,18 @@
     }
 
     // local preview of the clusters — free, instant, before any API call
-    let clustered = null, facts = null;
-    try {
-      const tz = ctx.profile.timezone && ctx.profile.timezone.offsetMin || 0;
-      facts = window.YSFacts.build(data, { tzOffsetMin: tz });
-      if (facts) facts.eras = window.YSFacts.eras(facts, data.watch);
-      clustered = window.YSCluster.build(data.watch, { maxClusters: 18 });
-    } catch (e) { /* surfaced below */ }
+    // Prefer what the upload pipeline already computed — clustering is 1.3s
+    // and there is no reason to do it twice.
+    let facts = ctx.facts || null;
+    let clustered = ctx.clusters || null;
+    if (!facts || !clustered) {
+      try {
+        const tz = (ctx.profile.timezone && ctx.profile.timezone.offsetMin) || 0;
+        facts = facts || window.YSFacts.build(data, { tzOffsetMin: tz });
+        if (facts && !facts.eras) facts.eras = window.YSFacts.eras(facts, data.watch);
+        clustered = clustered || window.YSCluster.build(data.watch, { maxClusters: 18 });
+      } catch (e) { /* surfaced below */ }
+    }
 
     if (!clustered || !clustered.clusters.length) {
       panel.appendChild(h('div', { class: 'card' },
@@ -424,6 +429,15 @@
       }
     }, 'Run personalised analysis');
     panel.appendChild(form);
+
+    // Arriving from the upload gate with "Personalised" already chosen: start
+    // immediately rather than making the user press a second button.
+    if (ctx.autorun === 'personal') {
+      setTimeout(() => {
+        const btn = form.querySelector('[data-f="run"]');
+        if (btn) btn.click();
+      }, 120);
+    }
   }
 
   function renderPersonalResult(container, res) {

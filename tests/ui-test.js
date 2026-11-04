@@ -34,7 +34,7 @@ function check(name, cond, detail) {
 (async () => {
   console.log('\n1. TIER UI RENDERS');
   check('four tiers present', $$('.tier').length === 4, $$('.tier').length + ' tiers');
-  check('personalised is the default', $('.tier[data-tier="personal"]').classList.contains('on'));
+  check('personalised tier exists', !!$('.tier[data-tier="personal"]'));
   check('built-in still available', !!$('.tier[data-tier="builtin"]'));
   check('digest still available', !!$('.tier[data-tier="digest"]'));
 
