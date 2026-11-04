@@ -101,10 +101,51 @@ Either way, **any OpenAI-compatible endpoint works.** The tool never hardcodes a
 
 ```bash
 node cli.mjs --test-connection        # verify before spending anything
-node cli.mjs takeout.zip --digest     # 1 call
-node cli.mjs takeout.zip --full       # ~13 calls, much deeper
-node cli.mjs takeout.zip --dry-run    # see the payload, send nothing
+node cli.mjs takeout.zip              # local only, no calls
+node cli.mjs takeout.zip --personal   # the model names your interests (~5 calls)
+node cli.mjs takeout.zip --digest     # legacy: fixed 22 categories, 1 call
+node cli.mjs takeout.zip --full       # legacy: per-category, ~13 calls
+node cli.mjs takeout.zip --personal --dry-run   # see the clusters, send nothing
 ```
+
+### `--personal` — no hardcoded categories
+
+The default AI modes bucket your viewing into 22 categories that ship in the
+source. That is a preset, and it means two different people get reports built on
+the same skeleton.
+
+`--personal` removes it:
+
+1. **Code clusters** your channels and titles by shared vocabulary — pure
+   arithmetic, no categories. On one real history it found a cluster of
+   `amazon, vcs, job, wfh, salary` without being told employment was a thing.
+2. **The model names** those clusters in your own words, and decides what it
+   found surprising.
+3. **The model designs the report** — it proposes the section titles and states
+   which facts each one rests on. No template titles.
+4. **The model writes** each section against only its assigned facts.
+
+The same history produced these section titles on one account:
+
+> *The search log that fell silent, then filed a job hunt* ·
+> *Eight dormant study channels switched back on in 2025* ·
+> *Why four music channels stopped on the same day*
+
+and these on a different account:
+
+> *Does a search log read like a biography? This one does* ·
+> *Searches fell from 1,721 to 161 — the watching never did* ·
+> *Why did the gym end in March 2026?*
+
+Different person, different structure — because the model chose what mattered.
+
+**What code still owns:** every number. The model never computes a statistic; it
+reads a fact sheet produced by `engine/facts.js` and may only cite facts that are
+in it. A claim with no supporting fact gets cut. That is what keeps
+personalisation from becoming invention.
+
+**Cost:** ~5 calls (1 taxonomy, 1 structure, 1 per section), not 13. Works with
+`--dry-run` to inspect the clusters first.
 
 ### Known-good endpoints
 
@@ -236,6 +277,9 @@ Relevant `.env` keys: `BASE_URL`, `MODEL`, `API_KEY`, `MAX_TOKENS`, `TEMPERATURE
 youscope/
 ├── cli.mjs               # the CLI — reads .env, writes reports
 ├── engine/               # pure JS, no dependencies, runs in Node or a browser
+│   ├── cluster.js        # vocabulary clustering — no preset categories
+│   ├── facts.js          # every verifiable number, nothing interpretive
+│   ├── personalize.js    # model names clusters, designs and writes the report
 │   ├── takeout.js        # Takeout HTML/CSV parser
 │   ├── zip.js            # ZIP + ZIP64 reader
 │   ├── taxonomy.js       # 22-category classifier

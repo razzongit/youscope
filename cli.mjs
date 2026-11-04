@@ -41,6 +41,7 @@ function parseArgs(argv) {
     else if (t === '--no-ai') a.noAi = true;
     else if (t === '--digest') a.digest = true;
     else if (t === '--full') a.full = true;
+    else if (t === '--personal') a.personal = true;
     else if (t === '--dry-run') a.dryRun = true;
     else if (t === '--json') a.json = true;
     else if (t === '--quiet' || t === '-q') a.quiet = true;
@@ -64,6 +65,8 @@ OPTIONS
   --no-ai              Analysis only. No network, no key needed. (default)
   --digest             One AI call over the aggregate statistics.
   --full               One AI call per interest, then a synthesis pass (~13 calls).
+  --personal           Let the model name your interest groups and design the
+                       report. No hardcoded categories or section titles. (~5 calls)
   --dry-run            Print what would be sent to the model, then exit.
   --test-connection    Check the configured endpoint, then exit.
 
@@ -96,7 +99,7 @@ EXAMPLES
 /* ─── engine loaders (browser-style globals) ───────────────────── */
 function loadEngine() {
   const self = globalThis;
-  const files = ['takeout', 'taxonomy', 'analytics', 'correlations', 'insights', 'openrouter', 'ai', 'deep'];
+  const files = ['takeout', 'taxonomy', 'analytics', 'correlations', 'insights', 'openrouter', 'ai', 'deep', 'cluster', 'facts', 'personalize'];
   for (const f of files) {
     const code = require('node:fs').readFileSync(join(ROOT, 'engine', f + '.js'), 'utf8');
     // strip the CommonJS branch so the UMD wrapper attaches to globalThis
@@ -109,7 +112,8 @@ function loadEngine() {
   return {
     T: self.YSTakeout, X: self.YSTaxonomy, A: self.YSAnalytics,
     C: self.YSCorrelations, I: self.YSInsights, AI: self.YSAI,
-    D: self.YSDeep, OR: self.YSOR,
+    D: self.YSDeep, OR: self.YSOR, CL: self.YSCluster,
+    F: self.YSFacts, P: self.YSPersonalize,
   };
 }
 
@@ -178,7 +182,7 @@ function aiConfig(env, args) {
 }
 
 /* ─── report writers ───────────────────────────────────────────── */
-function mdReport(profile, insights, ai, meta) {
+function mdReport(profile, insights, ai, meta, personalized) {
   const fmt = (n) => n >= 1e6 ? (n / 1e6).toFixed(1) + 'M'
     : n >= 1e3 ? (n / 1e3).toFixed(1).replace(/\.0$/, '') + 'k' : String(Math.round(n));
   const pct = (n) => n.toFixed(1).replace(/\.0$/, '') + '%';
@@ -193,6 +197,34 @@ function mdReport(profile, insights, ai, meta) {
     L.push(`**Events:** ${fmt(p.counts.watchEvents)} watches · ${fmt(p.counts.musicPlays)} music · ${fmt(p.counts.searches)} searches`, '');
   }
   L.push('---', '');
+
+  if (personalized) {
+    if (personalized.headline) {
+      L.push('> ' + personalized.headline, '');
+    }
+    if (personalized.noticed) {
+      L.push('_' + personalized.noticed + '_', '');
+    }
+    L.push('## Your interests, in your own terms', '');
+    L.push('The groups below were named from your own vocabulary — not from a preset list.', '');
+    for (const t of personalized.taxonomy) {
+      L.push(`**${t.name}** — ${t.share}% of your viewing (${t.videos.toLocaleString()} videos)`);
+      L.push(t.definition || '');
+      if (t.channels.length) L.push('_Channels:_ ' + t.channels.slice(0, 5).join(', '));
+      L.push('');
+    }
+    L.push('---', '');
+    for (const s of personalized.sections) {
+      L.push('## ' + s.title, '', s.body, '');
+    }
+    if (personalized.failedSections.length) {
+      L.push(`_(${personalized.failedSections.length} section(s) could not be written.)_`, '');
+    }
+    if (personalized.skipped) {
+      L.push('### What this report chose not to say', '', personalized.skipped, '');
+    }
+    L.push('---', '');
+  }
 
   L.push('## What the data says', '');
   for (const s of insights.sections) {
@@ -238,7 +270,7 @@ function mdReport(profile, insights, ai, meta) {
   return L.join('\n');
 }
 
-function htmlReport(profile, insights, ai, meta) {
+function htmlReport(profile, insights, ai, meta, personalized) {
   const esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   const md = (s) => esc(s).replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
   const p = profile;
@@ -271,7 +303,21 @@ function htmlReport(profile, insights, ai, meta) {
 <div class="sub">${esc(meta.source)} · ${p.range.days} days · ${p.counts.watchEvents.toLocaleString()} watches</div>
 ${ai?.tagline ? `<p style="margin:18px 0 0;font-size:18px;color:var(--text)">${esc(ai.tagline)}</p>` : ''}
 ${ai?.keywords?.length ? `<div style="margin:16px 0">${ai.keywords.map(k => `<span class="tag">${esc(k)}</span>`).join('')}</div>` : ''}
-${insights.sections.map(s => card(s.title, s.body)).join('')}
+${personalized ? `
+<section class="card"><h2>Your interests, in your own terms</h2>
+<p style="margin-bottom:16px">${esc('Named from your own vocabulary — not a preset list.')}</p>
+${personalized.taxonomy.map(t => `<div style="padding:10px 0;border-bottom:1px solid var(--line)">
+  <div style="display:flex;gap:10px;align-items:baseline">
+    <strong>${esc(t.name)}</strong>
+    <span style="margin-left:auto;font:12px ui-monospace,monospace;color:var(--acc)">${t.share}%</span>
+  </div>
+  <p style="font-size:13px">${esc(t.definition || '')}</p>
+  ${t.channels.length ? `<div class="tag" style="margin-top:6px">${esc(t.channels.slice(0,4).join(' · '))}</div>` : ''}
+</div>`).join('')}
+</section>
+${personalized.sections.map(s => `<section class="card"><h2>${esc(s.title)}</h2><p>${esc(s.body)}</p></section>`).join('')}
+${personalized.skipped ? `<section class="card"><h2>What this report chose not to say</h2><p>${esc(personalized.skipped)}</p></section>` : ''}
+` : insights.sections.map(s => card(s.title, s.body)).join('')}
 ${(ai?.sections || []).map(s => card(s.title, s.body)).join('')}
 <section class="card"><h2>Interests</h2><table>
 <tr><th>#</th><th>Interest</th><th>Share</th><th>Watches</th></tr>
@@ -323,7 +369,7 @@ async function main() {
 
   if (!args._.length) { console.log(HELP); process.exit(2); }
   const inputPath = resolve(args._[0]);
-  const wantAi = args.digest || args.full;
+  const wantAi = args.digest || args.full || args.personal;
   if (wantAi && !args.dryRun) {
     if (!cfg.baseUrl) { err('AI mode needs BASE_URL in .env'); process.exit(2); }
     if (!cfg.model) { err('AI mode needs MODEL in .env'); process.exit(2); }
@@ -336,7 +382,7 @@ async function main() {
   log(`  ${files.length} file${files.length === 1 ? '' : 's'}, ${(bytes / 1048576).toFixed(1)} MB`);
 
   // 2. parse
-  const { T, X, A, C, I, AI, D } = loadEngine();
+  const { T, X, A, C, I, AI, D, CL, F, P } = loadEngine();
   const data = T.parseTakeoutFiles(files);
   if (!data.watch.length) {
     err('No watch history found. Is this a YouTube Takeout export in HTML format?');
@@ -355,9 +401,51 @@ async function main() {
   const insights = I.build(profile);
   log(`  ${profile.interests.cats.length} categories · ${profile.evolution.quarters.length} quarters · ${profile.interests.coverage.toFixed(1)}% classified`);
 
-  // 4. AI (optional)
+  // 4a. Personalised mode: code computes facts, the model names and structures.
+  let personalized = null;
+  let facts = null;
+  if (args.personal) {
+    const tz = profile.timezone && profile.timezone.offsetMin ? profile.timezone.offsetMin : 0;
+    log('Computing facts…');
+    facts = F.build(data, { tzOffsetMin: tz });
+    facts.eras = F.eras(facts, data.watch);
+    log(`  ${facts.totalWatched.toLocaleString()} watches · ${facts.channels.toLocaleString()} channels · ${facts.eras.length} eras detected`);
+
+    log('Clustering your viewing by vocabulary (no preset categories)…');
+    const clustered = CL.build(data.watch, { maxClusters: 18 });
+    log(`  ${clustered.clusters.length} clusters · ${(100 * clustered.assigned / clustered.total).toFixed(0)}% of events grouped`);
+    if (!quiet) {
+      clustered.clusters.slice(0, 8).forEach((c) => log(`    · ${c.count} videos — ${c.terms.slice(0, 5).join(', ')}`));
+    }
+
+    if (args.dryRun) {
+      console.log('\n── DRY RUN: clustering is local; these are the clusters the model would name ──\n');
+      console.log(JSON.stringify(clustered.clusters.map(c => ({
+        videos: c.count,
+        channels: c.channels.slice(0, 5),
+        words: c.terms.slice(0, 10),
+        examples: c.samples.slice(0, 4),
+      })), null, 1));
+      console.log('\nNo request was made.');
+      process.exit(0);
+    }
+
+    try {
+      personalized = await P.run(facts, clustered.clusters, cfg, {
+        delayMs: cfg.delayMs,
+        onStage: (s) => log('  » ' + s),
+      });
+      log(`  ${personalized.taxonomy.length} groups named · ${personalized.sections.length} sections written`);
+    } catch (e) {
+      err('\nPersonalisation failed: ' + e.message);
+      err('Falling back to the local analysis only.');
+      personalized = null;
+    }
+  }
+
+  // 4b. AI (optional, legacy fixed-taxonomy modes)
   let ai = null;
-  if (wantAi) {
+  if (wantAi && !args.personal) {
     const digest = I.buildDigest(profile);
     if (args.dryRun) {
       const payload = args.full
@@ -391,7 +479,7 @@ async function main() {
       err('Continuing with the local analysis only.');
       ai = null;
     }
-  } else {
+  } else if (!personalized) {
     log('No AI mode requested — analysis is fully local.');
   }
 
@@ -411,16 +499,16 @@ async function main() {
   const htmlPath = join(outDir, base + '.html');
   const jsonPath = join(outDir, base + '.json');
 
-  await writeFile(mdPath, mdReport(profile, insights, ai, meta), 'utf8');
-  await writeFile(htmlPath, htmlReport(profile, insights, ai, meta), 'utf8');
-  await writeFile(jsonPath, JSON.stringify({ meta, profile, insights, ai }, null, 1), 'utf8');
+  await writeFile(mdPath, mdReport(profile, insights, ai, meta, personalized), 'utf8');
+  await writeFile(htmlPath, htmlReport(profile, insights, ai, meta, personalized), 'utf8');
+  await writeFile(jsonPath, JSON.stringify({ meta, profile, insights, ai, personalized, facts }, null, 1), 'utf8');
 
   const secs = ((Date.now() - t0) / 1000).toFixed(1);
   console.log(`\n✓ Done in ${secs}s${ai ? ' (with AI portrait)' : ' (local only)'}`);
   console.log(`  ${mdPath}`);
   console.log(`  ${htmlPath}`);
   console.log(`  ${jsonPath}`);
-  if (!ai && wantAi) console.log('\n  Note: AI step failed; the reports above contain the local analysis.');
+
 }
 
 main().catch((e) => { console.error('Fatal: ' + e.message); process.exit(1); });

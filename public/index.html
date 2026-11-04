@@ -3114,6 +3114,811 @@ Rules:
 
 </script>
 <script>
+/* YouScope — cluster.js
+ * Groups a person's channels and titles into clusters using arithmetic only.
+ *
+ * No categories are hardcoded here. Nothing knows what "fitness" or "finance"
+ * means. A cluster is just: a set of channels that share vocabulary, sized by
+ * how much the person watched them. What to CALL those clusters — and whether
+ * they matter — is decided later, by the model, from this person's own data.
+ */
+(function (root, factory) {
+  if (typeof module === 'object' && module.exports) module.exports = factory();
+  else root.YSCluster = factory();
+})(typeof self !== 'undefined' ? self : this, function () {
+  'use strict';
+
+  /* Function words and platform noise. This list is language plumbing, not
+   * taste: it exists so "the" and "shorts" do not look like signal. It makes no
+   * claim about what the person is interested in. */
+  const STOP = new Set(('a an the and or but if then than that this these those is are was were be been being ' +
+    'to of in on at for with from by as it its it\'s you your yours we our us they them their he she his her ' +
+    'i me my mine do does did doing done have has had having not no nor so such only own same too very can ' +
+    'will just don should now what which who whom when where why how all any both each few more most other ' +
+    'some there here about into over under again further once during before after above below between out up ' +
+    'down off on off why how—also ' +
+    /* YouTube/platform vocabulary */
+    'video videos shorts short full episode part clip clips live stream highlights official music audio ' +
+    'new latest update news hd 4k subscribe channel youtube watch playlist ' +
+    /* generic verbs that dominate titles without carrying topic */
+    'get got make made making take took taking go going went gone see saw seen know knew known think thought ' +
+    'want wanted need needed use used using try tried work works working look looks looked say says said tell ' +
+    'told give gave given come came coming put keep kept let thing things way ways time times day days year years ' +
+    'people person man woman men women one two three ' +
+    /* locale noise from Takeout titles */
+    'hindi english india indian full movie song songs').split(/\s+/).filter(Boolean));
+
+  function tokenize(text) {
+    if (!text) return [];
+    return String(text)
+      .toLowerCase()
+      .replace(/[\u200B-\u200D\uFEFF]/g, '')
+      .replace(/&amp;/g, '&').replace(/&#39;/g, "'").replace(/&quot;/g, '"')
+      .replace(/https?:\/\/\S+/g, ' ')
+      .replace(/[^a-z0-9\u0900-\u097F\s'-]/g, ' ')
+      .split(/\s+/)
+      .map((w) => w.replace(/^[-']+|[-']+$/g, ''))
+      .filter((w) => w.length >= 3 && w.length <= 30 && !STOP.has(w) && !/^\d+$/.test(w));
+  }
+
+  /* Build a term-frequency map for a set of documents. */
+  function tf(docs) {
+    const m = new Map();
+    for (const d of docs) {
+      const seen = new Set();
+      for (const t of tokenize(d)) {
+        m.set(t, (m.get(t) || 0) + 1);
+        seen.add(t);
+      }
+    }
+    return m;
+  }
+
+  /* Cosine similarity over term maps, weighted by inverse document frequency
+   * across the whole corpus so ubiquitous words stop dominating. */
+  function similarity(a, b, idf) {
+    let dot = 0, na = 0, nb = 0;
+    for (const [t, v] of a) {
+      const w = v * (idf.get(t) || 1);
+      na += w * w;
+    }
+    for (const [t, v] of b) {
+      const w = v * (idf.get(t) || 1);
+      nb += w * w;
+    }
+    const small = a.size < b.size ? a : b;
+    const big = a.size < b.size ? b : a;
+    for (const [t, v] of small) {
+      const ov = big.get(t);
+      if (!ov) continue;
+      dot += (v * (idf.get(t) || 1)) * (ov * (idf.get(t) || 1));
+    }
+    if (!na || !nb) return 0;
+    return dot / (Math.sqrt(na) * Math.sqrt(nb));
+  }
+
+  /**
+   * Cluster watched events into groups the person would recognise.
+   *
+   * Strategy: a channel is already a meaningful unit (a creator has a topic).
+   * So group by channel first, then merge channels whose vocabularies overlap.
+   * That avoids inventing categories and avoids the fragility of clustering
+   * raw titles directly.
+   *
+   * @param {Array} events  watch events: {title, channel, ts}
+   * @param {Object} opts   {maxClusters, minClusterSize, mergeThreshold}
+   * @returns {{clusters: Array, assigned: number, total: number}}
+   */
+  function build(events, opts) {
+    opts = opts || {};
+    const minSize = opts.minClusterSize || 2;
+    const mergeThreshold = opts.mergeThreshold !== undefined ? opts.mergeThreshold : 0.34;
+    const maxClusters = opts.maxClusters || 18;
+
+    const usable = (events || []).filter((e) => !e.ad && (e.channel || e.title));
+
+    // 1. group by channel
+    const byChannel = new Map();
+    for (const e of usable) {
+      const key = e.channel ? String(e.channel).replace(/\s*-\s*Topic$/i, '').trim() : '(unknown channel)';
+      if (!byChannel.has(key)) byChannel.set(key, { channel: key, events: [], titles: [] });
+      const g = byChannel.get(key);
+      g.events.push(e);
+      if (e.title) g.titles.push(e.title);
+    }
+
+    const all = [...byChannel.values()].sort((a, b) => b.events.length - a.events.length);
+    const groups = all.filter((g) => g.events.length >= minSize);
+    const residual = all.filter((g) => g.events.length < minSize);
+
+    if (!groups.length) return { clusters: [], assigned: 0, total: usable.length, residual: usable.length };
+
+    // 2. per-group term vectors + document frequency across groups
+    const vecs = groups.map((g) => tf(g.titles.slice(0, 400)));
+    const df = new Map();
+    for (const v of vecs) {
+      for (const t of v.keys()) df.set(t, (df.get(t) || 0) + 1);
+    }
+    const N = groups.length;
+    const idf = new Map();
+    for (const [t, d] of df) idf.set(t, Math.log((N + 1) / (d + 0.5)));
+
+    // 3. greedy merge: highest-similarity pairs first
+    const parent = groups.map((_, i) => i);
+    const find = (i) => (parent[i] === i ? i : (parent[i] = find(parent[i])));
+    const union = (a, b) => { const ra = find(a), rb = find(b); if (ra !== rb) parent[rb] = ra; };
+
+    const pairs = [];
+    for (let i = 0; i < groups.length; i++) {
+      for (let j = i + 1; j < groups.length; j++) {
+        const s = similarity(vecs[i], vecs[j], idf);
+        if (s >= mergeThreshold) pairs.push({ i, j, s });
+      }
+    }
+    pairs.sort((a, b) => b.s - a.s);
+    for (const p of pairs) union(p.i, p.j);
+
+    // 4. collect merged clusters
+    const merged = new Map();
+    groups.forEach((g, i) => {
+      const r = find(i);
+      if (!merged.has(r)) merged.set(r, { members: [], events: [], titles: [] });
+      const m = merged.get(r);
+      m.members.push(g.channel);
+      m.events.push(...g.events);
+      m.titles.push(...g.titles);
+    });
+
+    // 5. rank by volume, cap the count, and describe each with its own top terms
+    let clusters = [...merged.values()]
+      .sort((a, b) => b.events.length - a.events.length)
+      .slice(0, maxClusters);
+
+    const classified = [];
+    for (const c of clusters) {
+      const v = tf(c.titles.slice(0, 500));
+      const terms = [...v.entries()]
+        .map(([t, n]) => ({ t, w: n * (idf.get(t) || 1) }))
+        .sort((a, b) => b.w - a.w)
+        .slice(0, 12)
+        .map((x) => x.t);
+
+      const times = c.events.map((e) => e.ts).filter(Boolean).sort((a, b) => a - b);
+      const sample = pickSpread(c.titles, 14);
+
+      classified.push({
+        channels: c.members.slice(0, 12),
+        channelCount: c.members.length,
+        count: c.events.length,
+        share: +((100 * c.events.length) / usable.length).toFixed(1),
+        terms,
+        samples: sample,
+        first: times.length ? times[0] : null,
+        last: times.length ? times[times.length - 1] : null,
+      });
+    }
+
+    // The long tail is real signal: someone's scattered curiosity. Keep it as
+    // one named-later bucket rather than discarding four fifths of the history.
+    if (residual.length) {
+      const rEvents = [];
+      for (const g of residual) rEvents.push(...g.events);
+      const rTitles = [];
+      for (const g of residual) rTitles.push(...g.titles);
+      if (rEvents.length) {
+        const v = tf(rTitles.slice(0, 800));
+        const terms = [...v.entries()]
+          .map(([t, n]) => ({ t, w: n * (idf.get(t) || 1) }))
+          .sort((a, b) => b.w - a.w).slice(0, 12).map((x) => x.t);
+        const times = rEvents.map((e) => e.ts).filter(Boolean).sort((a, b) => a - b);
+        classified.push({
+          channels: residual.slice(0, 12).map((g) => g.channel),
+          channelCount: residual.length,
+          count: rEvents.length,
+          share: +((100 * rEvents.length) / usable.length).toFixed(1),
+          terms,
+          samples: pickSpread(rTitles, 14),
+          first: times.length ? times[0] : null,
+          last: times.length ? times[times.length - 1] : null,
+          isResidual: true,
+        });
+      }
+    }
+
+    const assigned = classified.reduce((n, c) => n + c.count, 0);
+    return { clusters: classified, assigned, total: usable.length };
+  }
+
+  /* Evenly spaced sample so the model sees titles from across the whole span,
+   * not just whatever happens to be first. */
+  function pickSpread(arr, n) {
+    if (!arr.length) return [];
+    if (arr.length <= n) return arr.slice();
+    const out = [];
+    const step = arr.length / n;
+    for (let i = 0; i < n; i++) out.push(arr[Math.floor(i * step)]);
+    return out;
+  }
+
+  return { build, tokenize, pickSpread };
+});
+
+</script>
+<script>
+/* YouScope — facts.js
+ * Every verifiable thing that can be computed about an export.
+ *
+ * Design rule: this file produces FACTS ONLY. It never decides what they mean,
+ * never ranks them by importance, never writes a sentence about them. Naming
+ * and interpretation belong to the model (personalize.js). Keeping that line
+ * clean is what makes the output auditable — any claim in the report can be
+ * traced back to a value computed here.
+ */
+(function (root, factory) {
+  if (typeof module === 'object' && module.exports) module.exports = factory();
+  else root.YSFacts = factory();
+})(typeof self !== 'undefined' ? self : this, function () {
+  'use strict';
+
+  const DAY = 86400000;
+  const sum = (a) => a.reduce((x, y) => x + y, 0);
+  const dstr = (ms) => new Date(ms).toISOString().slice(0, 10);
+  const mstr = (ms) => new Date(ms).toISOString().slice(0, 7);
+
+  /* Words whose presence in a query suggests a life transition rather than a
+   * topic. This is a language heuristic, not a taxonomy of interests. */
+  const TRANSITION = /\b(job|jobs|salary|hire|hiring|resign|quit|fired|interview|place|placement|intern|internship|admission|admit|exam|result|fail|backlog|degree|college|university|drop|rent|rented|lease|licen[cs]e|loan|debt|fee|fees|money|broke|shift|relocat|move|visa|marriage|marry|pregnan|hospital|surgery|diagnos)\b/i;
+
+  function build(data, opts) {
+    opts = opts || {};
+    const watch = (data.watch || []).filter((e) => !e.ad && e.ts);
+    const search = (data.search || []).filter((s) => s.ts);
+    if (!watch.length) return null;
+
+    watch.sort((a, b) => a.ts - b.ts);
+    const first = watch[0].ts;
+    const last = watch[watch.length - 1].ts;
+    const days = Math.max(1, Math.round((last - first) / DAY) + 1);
+
+    /* tz: use the modal label so hours are local, not UTC */
+    let tzMin = 0;
+    if (opts.tzOffsetMin !== undefined) tzMin = opts.tzOffsetMin;
+    const localHour = (ts) => new Date(ts + tzMin * 60000).getUTCHours();
+    const localMonth = (ts) => new Date(ts + tzMin * 60000).toISOString().slice(0, 7);
+
+    /* ── channels: lifetime, gaps, abandonment, returns ─────────── */
+    const chMap = new Map();
+    for (const e of watch) {
+      if (!e.channel) continue;
+      const k = String(e.channel).replace(/\s*-\s*Topic$/i, '').trim();
+      if (!chMap.has(k)) chMap.set(k, { channel: k, times: [], titles: [] });
+      const c = chMap.get(k);
+      c.times.push(e.ts);
+      if (e.title) c.titles.push(e.title);
+    }
+
+    const cutoff = last - 180 * DAY;
+    const abandoned = [];
+    const longReturns = [];
+    const churnByMonth = new Map();
+
+    for (const [name, c] of chMap) {
+      c.times.sort((a, b) => a - b);
+      const n = c.times.length;
+      if (n >= 2) {
+        // largest gap followed by a resume
+        let bestGap = 0, resumeAt = 0;
+        for (let i = 1; i < n; i++) {
+          const g = c.times[i] - c.times[i - 1];
+          if (g > bestGap) { bestGap = g; resumeAt = c.times[i]; }
+        }
+        const gapDays = Math.round(bestGap / DAY);
+        if (gapDays >= 120 && n >= 3) {
+          longReturns.push({ channel: name, days: gapDays, resumed: dstr(resumeAt), watches: n });
+        }
+      }
+      if (n >= 4 && c.times[n - 1] < cutoff) {
+        abandoned.push({ channel: name, watches: n, lastSeen: dstr(c.times[n - 1]) });
+      }
+      // first-seen month = churn
+      const fm = localMonth(c.times[0]);
+      churnByMonth.set(fm, (churnByMonth.get(fm) || 0) + 1);
+    }
+
+    longReturns.sort((a, b) => b.days - a.days);
+    abandoned.sort((a, b) => b.watches - a.watches);
+
+    /* ── monthly volume, silences ───────────────────────────────── */
+    const monthCount = new Map();
+    for (const e of watch) {
+      const m = localMonth(e.ts);
+      monthCount.set(m, (monthCount.get(m) || 0) + 1);
+    }
+    const monthList = [...monthCount.entries()].sort((a, b) => (a[0] < b[0] ? -1 : 1));
+    const counts = monthList.map((x) => x[1]);
+    const activeMonths = counts.filter((c) => c > 0);
+    const median = activeMonths.slice().sort((a, b) => a - b)[Math.floor(activeMonths.length / 2)] || 1;
+
+    // a "silence" is a month at or below 15% of the median
+    const silences = monthList
+      .filter(([, c]) => c <= Math.max(2, median * 0.15))
+      .map(([month, count]) => ({ month, count }))
+      .slice(0, 12);
+
+    /* ── rhythm ─────────────────────────────────────────────────── */
+    const hours = new Array(24).fill(0);
+    const dows = new Array(7).fill(0);
+    for (const e of watch) {
+      const h = localHour(e.ts);
+      hours[h]++;
+      dows[new Date(e.ts + tzMin * 60000).getUTCDay()]++;
+    }
+    const peakHour = hours.indexOf(Math.max(...hours));
+    const dowNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+
+    /* ── search arc: how questions changed per year ─────────────── */
+    const byYear = new Map();
+    for (const s of search) {
+      const y = new Date(s.ts + tzMin * 60000).getUTCFullYear();
+      if (!byYear.has(y)) byYear.set(y, []);
+      byYear.get(y).push(s.query);
+    }
+    const searchArc = [...byYear.entries()].sort((a, b) => a[0] - b[0]).map(([year, qs]) => {
+      const transition = qs.filter((q) => TRANSITION.test(q));
+      return {
+        year,
+        count: qs.length,
+        transitionQueries: transition.length,
+        samples: qs.slice(0, 8),
+        transitionSamples: transition.slice(0, 6),
+      };
+    });
+
+    /* ── title morphology: what shape is the content ───────────── */
+    const titles = watch.map((e) => e.title || '').filter(Boolean);
+    let shorts = 0, longform = 0, live = 0;
+    for (const t of titles) {
+      const l = t.toLowerCase();
+      if (/#shorts|#short|shortsfeed|ytshorts/.test(l)) shorts++;
+      else if (/live|stream|premiere/.test(l)) live++;
+      else longform++;
+    }
+
+    /* ── volume by cluster-free buckets: just counts, no naming ─── */
+    const totalWatched = watch.length;
+    const uniqueChannels = chMap.size;
+
+    return {
+      /* coverage */
+      from: dstr(first),
+      to: dstr(last),
+      spanDays: days,
+      spanYears: +(days / 365.25).toFixed(1),
+
+      /* volume */
+      totalWatched,
+      channels: uniqueChannels,
+      searches: search.length,
+      activeMonths: monthCount.size,
+
+      /* shape */
+      shape: {
+        shorts, live, longform,
+        shortsShare: +((100 * shorts) / Math.max(1, titles.length)).toFixed(1),
+      },
+
+      /* rhythm */
+      rhythm: {
+        peakHour,
+        nightShare: +((100 * sum(hours.slice(0, 6))) / totalWatched).toFixed(1),
+        busiestWeekday: dowNames[dows.indexOf(Math.max(...dows))],
+        hours,
+      },
+
+      /* movement */
+      longReturns: longReturns.slice(0, 12),
+      abandoned: abandoned.slice(0, 15),
+      silences,
+      medianMonthVolume: median,
+
+      /* questions they asked */
+      searchArc,
+      transitionYears: searchArc.filter((y) => y.transitionQueries > 0)
+        .map((y) => ({ year: y.year, count: y.transitionQueries, samples: y.transitionSamples })),
+
+      /* churn: when did new channels appear */
+      channelChurn: [...churnByMonth.entries()].sort((a, b) => (a[0] < b[0] ? -1 : 1))
+        .map(([month, n]) => ({ month, newChannels: n })),
+    };
+  }
+
+  /* Eras: segment the timeline where behaviour changes, using only counts.
+   * A boundary is placed where the mix of top channels shifts and monthly
+   * volume changes level. No labels — eras are unnamed periods. */
+  function eras(facts, watch, opts) {
+    opts = opts || {};
+    const minEraDays = opts.minEraDays || 120;
+    if (!facts) return [];
+    const events = (watch || []).filter((e) => !e.ad && e.ts);
+    if (events.length < 50) return [];
+
+    events.sort((a, b) => a.ts - b.ts);
+    const first = events[0].ts;
+    const last = events[events.length - 1].ts;
+
+    // bucket into 90-day windows
+    const WINDOW = 90 * DAY;
+    const buckets = new Map();
+    for (const e of events) {
+      const idx = Math.floor((e.ts - first) / WINDOW);
+      if (!buckets.has(idx)) buckets.set(idx, { start: first + idx * WINDOW, events: [] });
+      buckets.get(idx).events.push(e);
+    }
+    const series = [...buckets.values()].sort((a, b) => a.start - b.start);
+    if (series.length < 3) return [];
+
+    // boundary score: how different is the channel set from the previous window
+    const scores = [];
+    for (let i = 1; i < series.length; i++) {
+      const prev = new Set(series[i - 1].events.map((e) => e.channel).filter(Boolean));
+      const cur = new Set(series[i].events.map((e) => e.channel).filter(Boolean));
+      let overlap = 0;
+      for (const c of cur) if (prev.has(c)) overlap++;
+      const turnover = 1 - overlap / Math.max(1, Math.min(prev.size, cur.size));
+      const volDelta = Math.abs(series[i].events.length - series[i - 1].events.length) /
+        Math.max(1, series[i - 1].events.length);
+      scores.push({ i, score: turnover * 0.7 + Math.min(1, volDelta) * 0.3 });
+    }
+
+    // take the strongest boundaries, respecting minEraDays
+    scores.sort((a, b) => b.score - a.score);
+    const chosen = [];
+    for (const s of scores) {
+      const at = series[s.i].start;
+      if (chosen.some((c) => Math.abs(c - at) < minEraDays * DAY)) continue;
+      if (s.score < 0.45) continue;
+      chosen.push(at);
+      if (chosen.length >= 5) break;
+    }
+    chosen.sort((a, b) => a - b);
+
+    const bounds = [first, ...chosen, last + 1];
+    return bounds.slice(0, -1).map((start, idx) => {
+      const end = bounds[idx + 1] - 1;
+      const inEra = events.filter((e) => e.ts >= start && e.ts <= end);
+      const chCount = new Map();
+      for (const e of inEra) if (e.channel) chCount.set(e.channel, (chCount.get(e.channel) || 0) + 1);
+      const topChannels = [...chCount.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5)
+        .map(([c, n]) => `${c} (${n})`);
+      const months = Math.max(1, (end - start) / (30 * DAY));
+      return {
+        from: dstr(start),
+        to: dstr(end),
+        watches: inEra.length,
+        perMonth: +(inEra.length / months).toFixed(1),
+        topChannels,
+      };
+    });
+  }
+
+  return { build, eras, TRANSITION };
+});
+
+</script>
+<script>
+/* YouScope — personalize.js
+ * The model, not the code, decides what this person's interests ARE.
+ *
+ * Code's job: cluster their actual viewing into vocabulary groups and compute
+ * every number. The model's job: name those groups in this person's terms,
+ * decide which facts matter, and propose the report's own structure.
+ *
+ * Nothing here knows what "fitness" or "finance" means.
+ */
+(function (root, factory) {
+  if (typeof module === 'object' && module.exports) module.exports = factory();
+  else root.YSPersonalize = factory();
+})(typeof self !== 'undefined' ? self : this, function () {
+  'use strict';
+
+  function getAI() {
+    return (typeof YSAI !== 'undefined' ? YSAI : null)
+      || (typeof window !== 'undefined' && window.YSAI)
+      || (typeof require === 'function' ? require('./ai.js') : null)
+      || (typeof global !== 'undefined' ? global.YSAI : null);
+  }
+
+  /* ── 1. Name the clusters ─────────────────────────────────────── */
+  function taxonomyPrompt(clusters, meta) {
+    const payload = clusters.map((c, i) => ({
+      id: i,
+      videos: c.count,
+      channels: c.channels.slice(0, 4),
+      words: c.terms.slice(0, 8),
+      examples: c.samples.slice(0, 3).map((t) => String(t).slice(0, 70)),
+    }));
+
+    return `A person watched ${meta.total} videos. Their viewing has been grouped by shared vocabulary into the clusters below. The groups are pure arithmetic — nothing about their meaning has been decided yet.
+
+YOUR TASK: name these clusters the way THIS person would describe them. Not textbook categories. If a cluster is "amazon, vcs, job, wfh, salary" then "Amazon employment stories" beats "Career". If it is "haseen, khayaal, gallan, talwiind" then name the actual music scene, not "Music".
+
+CLUSTERS:
+${JSON.stringify(payload, null, 1)}
+
+Return JSON:
+{
+  "taxonomy": [
+    {
+      "clusterIds": [0, 3],
+      "name": "what this person would call it, 2-5 words",
+      "definition": "one line: what this body of watching actually is",
+      "weight": "primary | secondary | peripheral"
+    }
+  ],
+  "noticed": "one sentence on anything surprising in HOW these clusters relate"
+}
+
+Rules:
+- Merge clusters that are really one interest. Split nothing — you only have these groups.
+- Every cluster id 0-${clusters.length - 1} must appear exactly once across taxonomy.clusterIds.
+- Names must come from the actual words and titles shown. Do not import outside categories.
+- 4-9 groups. Fewer if the viewing is genuinely narrow.
+- If one cluster is a catch-all of unrelated leftovers, name it honestly as such.
+- JSON only, no fences.`;
+  }
+
+  /* ── 2. Decide what is worth saying ───────────────────────────── */
+  function slimFacts(facts) {
+    // Keep the fact sheet small enough for a reasoning model to answer quickly.
+    const { hours, channelChurn, ...rest } = facts;
+    return {
+      ...rest,
+      longReturns: (rest.longReturns || []).slice(0, 8),
+      abandoned: (rest.abandoned || []).slice(0, 10),
+      silences: (rest.silences || []).slice(0, 8),
+      searchArc: (rest.searchArc || []).map((y) => ({ ...y, samples: y.samples.slice(0, 5) })),
+      eras: (rest.eras || []).map((e) => ({ ...e, topChannels: e.topChannels.slice(0, 3) })),
+    };
+  }
+
+  function structurePrompt(facts, taxonomy) {
+    return `Here is a verifiable FACT SHEET about one person's ${facts.spanDays} days of YouTube history, plus the interest groups that emerged from it.
+
+FACTS (every value computed from their data; you may not invent others):
+${JSON.stringify(slimFacts(facts), null, 1)}
+
+INTEREST GROUPS (named from their own vocabulary):
+${JSON.stringify(taxonomy, null, 1)}
+
+YOUR TASK: decide what is actually interesting about this person, and design the report around it.
+
+Do NOT use generic section names like "Overview", "Interests", "How you changed". Those are templates. Choose the questions that THIS data answers in a way worth reading.
+
+Return JSON:
+{
+  "headline": "one sentence, under 20 words, the single most striking true thing here",
+  "sections": [
+    {
+      "title": "a specific question or claim, e.g. 'The year the searches stopped'",
+      "intent": "what this section establishes",
+      "citesFacts": ["names of the fact fields this section rests on, e.g. searchArc, silences, returns"]
+    }
+  ],
+  "skip": "one sentence naming something you deliberately did NOT report, and why"
+}
+
+Rules:
+- 3-6 sections. Every one must rest on at least one named fact field.
+- Prefer facts with sharp contrast: returns after long gaps, silences, clusters that shrank, arcs that turned.
+- If the facts are thin, say fewer things. Do not pad.
+- JSON only, no fences.`;
+  }
+
+  /* ── 3. Write each section against its assigned facts ────────── */
+  function sectionPrompt(section, facts, taxonomy, evidence) {
+    return `Write ONE section of a personal report from verifiable data.
+
+SECTION TITLE: ${section.title}
+INTENT: ${section.intent}
+FACTS IT SHOULD USE: ${JSON.stringify(section.citesFacts)}
+
+FULL FACT SHEET:
+${JSON.stringify(slimFacts(facts), null, 1)}
+
+INTEREST GROUPS:
+${JSON.stringify(taxonomy, null, 1)}
+
+${evidence ? `SPECIFIC EVIDENCE FOR THIS SECTION:\n${evidence}\n` : ''}
+Write 2-4 sentences. Second person. Concrete.
+
+Rules:
+- Every sentence must be traceable to a number or name above. If you cannot ground it, cut it.
+- Never state a statistic that is not in the fact sheet. Do not round differently than the data does.
+- No horoscope phrasing. No advice. No "you should".
+- If the evidence is thin, write one honest sentence instead of three padded ones.
+- Plain text, no markdown headers, no JSON wrapper.`;
+  }
+
+  /* ── orchestrator ─────────────────────────────────────────────── */
+  async function run(facts, clusters, cfg, hooks) {
+    hooks = hooks || {};
+    const onStage = hooks.onStage || (() => {});
+    const ai = getAI();
+    if (!ai) throw new Error('AI module unavailable.');
+
+    const call = async (prompt, maxTokens, json, label) => {
+      const attempt = async (extra) => {
+        const r = await ai.chat(cfg, [
+          { role: 'system', content: 'You are a precise behavioural analyst. You only state what the data supports.' },
+          { role: 'user', content: prompt + (extra || '') },
+        ], { json: !!json, maxTokens });
+        if (!json) return r.content;
+        const parsed = ai.extractJson(r.content);
+        if (parsed) return parsed;
+        return { __parseFailed: true, __raw: String(r.content || '').slice(0, 300) };
+      };
+
+      let out = await attempt('');
+      if (json && out && out.__parseFailed) {
+        // One retry with an explicit pointer at the format.
+        out = await attempt('\n\nReturn ONLY a JSON object. No prose, no markdown fences, no explanation.');
+      }
+      if (json && out && out.__parseFailed) {
+        throw new Error(`The model returned text that was not JSON for "${label}". It said: "${out.__raw.slice(0, 160)}..." — try a model with stronger JSON support.`);
+      }
+      return out;
+    };
+
+    // 1. taxonomy
+    onStage('Naming your interest groups');
+    const taxOut = await call(taxonomyPrompt(clusters, { total: facts.totalWatched }), 2400, true, 'naming your groups');
+    if (!taxOut || !Array.isArray(taxOut.taxonomy)) {
+      throw new Error('The model did not return a usable taxonomy. Try a stronger model.');
+    }
+    const taxonomy = taxOut.taxonomy.map((t) => ({
+      name: t.name,
+      definition: t.definition,
+      weight: t.weight || 'secondary',
+      clusters: (t.clusterIds || []).map((id) => clusters[id]).filter(Boolean),
+    })).filter((t) => t.clusters.length);
+
+    const counts = taxonomy.map((t) => ({
+      name: t.name, definition: t.definition, weight: t.weight,
+      videos: t.clusters.reduce((n, c) => n + c.count, 0),
+      share: +t.clusters.reduce((n, c) => n + c.share, 0).toFixed(1),
+      channels: [...new Set(t.clusters.flatMap((c) => c.channels))].slice(0, 8),
+      terms: [...new Set(t.clusters.flatMap((c) => c.terms || []))].slice(0, 10),
+    })).sort((a, b) => b.videos - a.videos);
+
+    // 2. structure
+    onStage('Deciding what is worth saying');
+    let struct = await call(structurePrompt(facts, counts), 2400, true, 'choosing what to report');
+    if (!struct || !Array.isArray(struct.sections) || !struct.sections.length) {
+      // Degrade rather than fail: keep the taxonomy, which is already useful,
+      // and derive sections from the strongest facts we have.
+      onStage('Structure step produced nothing usable — deriving sections from the facts');
+      const derived = deriveSections(facts);
+      struct = { headline: null, sections: derived, skip: null };
+    }
+
+    // 3. write sections
+    const sections = [];
+    for (let i = 0; i < struct.sections.length; i++) {
+      const s = struct.sections[i];
+      onStage(`Writing ${i + 1} of ${struct.sections.length}: ${s.title}`);
+      try {
+        const evidence = gatherEvidence(s, facts);
+        const body = await call(sectionPrompt(s, facts, counts, evidence), 1200, false, s.title);
+        if (body && String(body).trim()) {
+          sections.push({ title: s.title, body: String(body).trim(), cites: s.citesFacts || [] });
+        }
+      } catch (e) {
+        sections.push({ title: s.title, body: null, error: e.message });
+      }
+      if (hooks.delayMs) await new Promise((r) => setTimeout(r, hooks.delayMs));
+    }
+
+    return {
+      source: 'ai-personalized',
+      headline: struct.headline || null,
+      taxonomy: counts,
+      sections: sections.filter((s) => s.body),
+      failedSections: sections.filter((s) => !s.body),
+      skipped: struct.skip || null,
+      noticed: taxOut.noticed || null,
+    };
+  }
+
+  /* When the model cannot propose a structure, build one from whichever facts
+   * are most striking. Ordering is by measurable contrast, not by taste. */
+  function deriveSections(facts) {
+    const out = [];
+    if (facts.longReturns && facts.longReturns.length >= 3) {
+      out.push({
+        title: `Channels you came back to after ${Math.round(facts.longReturns[0].days / 365 * 10) / 10} years`,
+        intent: 'show the returns after long gaps',
+        citesFacts: ['longReturns'],
+      });
+    }
+    if (facts.searchArc && facts.searchArc.length) {
+      const peak = facts.searchArc.slice().sort((a, b) => b.count - a.count)[0];
+      out.push({
+        title: `The year you searched ${peak.count} times`,
+        intent: 'trace how questions changed',
+        citesFacts: ['searchArc'],
+      });
+    }
+    if (facts.abandoned && facts.abandoned.length >= 3) {
+      const top = facts.abandoned[0];
+      out.push({
+        title: `${facts.abandoned.length} channels went quiet`,
+        intent: 'name what stopped',
+        citesFacts: ['abandoned'],
+      });
+    }
+    if (facts.eras && facts.eras.length >= 2) {
+      const big = facts.eras.slice().sort((a, b) => b.watches - a.watches)[0];
+      const share = ((100 * big.watches) / Math.max(1, facts.totalWatched)).toFixed(1);
+      out.push({
+        title: `Where ${share}% of your watching actually happened`,
+        intent: 'describe the concentration',
+        citesFacts: ['eras'],
+      });
+    }
+    if (facts.silences && facts.silences.length) {
+      out.push({
+        title: 'The months that went quiet',
+        intent: 'describe the gaps',
+        citesFacts: ['silences'],
+      });
+    }
+    if (!out.length) {
+      out.push({ title: 'What the numbers show', intent: 'summarise', citesFacts: ['totalWatched', 'channels'] });
+    }
+    return out.slice(0, 5);
+  }
+
+  /* Pull the specific rows a section asked for, so the writer sees detail
+   * rather than the whole fact sheet every time. */
+  function gatherEvidence(section, facts) {
+    const wants = (section.citesFacts || []).map((s) => String(s).toLowerCase());
+    const lines = [];
+    const pick = (key) => wants.some((w) => w.includes(key.toLowerCase()));
+
+    if (pick('return') && facts.longReturns) {
+      lines.push('Returns after long gaps: ' + facts.longReturns.map(
+        (r) => `${r.channel} came back after ${r.days} days (${r.resumed})`).join('; '));
+    }
+    if (pick('abandon') && facts.abandoned) {
+      lines.push('Channels they stopped: ' + facts.abandoned.slice(0, 8).map(
+        (a) => `${a.channel} (${a.watches} videos, last ${a.lastSeen})`).join('; '));
+    }
+    if (pick('silence') && facts.silences) {
+      lines.push('Unusually quiet periods: ' + facts.silences.map(
+        (s) => `${s.month} had ${s.count} watches`).join('; '));
+    }
+    if (pick('search') && facts.searchArc) {
+      lines.push('Searches by year: ' + facts.searchArc.map(
+        (y) => `${y.year}: ${y.count} searches, e.g. ${(y.samples || []).slice(0, 4).join(' / ')}`).join(' || '));
+    }
+    if (pick('era') && facts.eras) {
+      lines.push('Detected eras: ' + facts.eras.map(
+        (e) => `${e.from}–${e.to}: ${e.channelsPerMonth} new channels/month, top groups ${(e.topGroups || []).join(', ')}`).join(' || '));
+    }
+    if (pick('hour') || pick('rhythm')) {
+      lines.push(`Peak hour ${facts.rhythm.peakHour}:00, ${facts.rhythm.nightShare}% after midnight, busiest weekday ${facts.rhythm.busiestWeekday}`);
+    }
+    if (pick('total') || pick('coverage')) {
+      lines.push(`Coverage ${facts.from} to ${facts.to} (${facts.spanDays} days), ${facts.totalWatched} watches across ${facts.channels} channels`);
+    }
+    return lines.length ? lines.join('\n') : null;
+  }
+
+  return { run, taxonomyPrompt, structurePrompt, sectionPrompt, slimFacts };
+});
+
+</script>
+<script>
 /* YouScope — zip.js
  * Minimal ZIP reader for Takeout exports (stored + deflate), browser & Node.
  * Depends on fflate's inflateSync when available; falls back to DecompressionStream
