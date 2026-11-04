@@ -419,7 +419,7 @@
         barEl.style.width = '100%';
         stageEl.textContent = 'done';
         const done = h('div', { style: 'margin-top:16px' });
-        renderPersonalResult(done, result);
+        renderPersonalResult(done, result, ctx);
         out.appendChild(done);
         // Hand the model's grouping to the app so the charts rebuild on it.
         if (ctx.onPersonalized) ctx.onPersonalized(result);
@@ -442,7 +442,7 @@
     }
   }
 
-  function renderPersonalResult(container, res) {
+  function renderPersonalResult(container, res, outerCtx) {
     if (res.headline) {
       container.appendChild(h('div', { class: 'card' },
         `<div style="font-family:var(--serif);font-size:1.5rem;line-height:1.3;letter-spacing:-.01em">
@@ -467,11 +467,28 @@
     });
     container.appendChild(tax);
 
+    // Each section renders through the block library: prose plus whatever
+    // visuals the model chose, validated against the fixed vocabulary.
+    const blockCtx = {
+      profile: ctx.profile, facts: ctx.facts || null,
+      taxonomyGroups: res.taxonomy, body: '',
+    };
     res.sections.forEach((s) => {
-      container.appendChild(h('div', { class: 'card', style: 'margin-top:14px' },
-        `<div class="eyebrow" style="margin-bottom:8px">${esc(s.title)}</div>
-         <p class="narr">${esc(s.body)}</p>
-         ${s.cites && s.cites.length ? `<div class="hint" style="margin-top:10px;opacity:.6">evidence: ${esc(s.cites.join(', '))}</div>` : ''}`));
+      const card = h('div', { class: 'card', style: 'margin-top:14px' });
+      card.appendChild(h('div', { class: 'eyebrow', style: 'margin-bottom:10px' }, esc(s.title)));
+
+      const inner = { ...blockCtx, body: s.body };
+      if (window.YSBlocks) {
+        card.appendChild(window.YSBlocks.renderSection(s, inner));
+      } else {
+        card.appendChild(h('p', { class: 'narr' }, esc(s.body)));
+      }
+
+      if (s.cites && s.cites.length) {
+        card.appendChild(h('div', { class: 'hint', style: 'margin-top:12px;opacity:.55' },
+          'evidence: ' + esc(s.cites.join(', '))));
+      }
+      container.appendChild(card);
     });
 
     if (res.failedSections && res.failedSections.length) {

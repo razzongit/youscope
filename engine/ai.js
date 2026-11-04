@@ -313,8 +313,10 @@ Reply with JSON only, matching this shape:
       if (fallbackList.length > 1) body.models = fallbackList;
     }
 
+    // Prefer an explicit option, then the configured timeout, then a default.
+    const timeoutMs = opts.timeoutMs || Number(cfg.timeoutMs) || 120000;
     const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), opts.timeoutMs || 120000);
+    const timer = setTimeout(() => ctrl.abort(), timeoutMs);
     let res;
     try {
       res = await fetch(base + '/chat/completions', {
@@ -322,7 +324,7 @@ Reply with JSON only, matching this shape:
       });
     } catch (e) {
       clearTimeout(timer);
-      if (e.name === 'AbortError') throw new Error('Request timed out after ' + Math.round((opts.timeoutMs || 120000) / 1000) + 's. Try a smaller or faster model.');
+      if (e.name === 'AbortError') throw new Error('Request timed out after ' + Math.round(timeoutMs / 1000) + 's. Raise TIMEOUT_MS in .env, or use a faster model.');
       if (isFileProtocol()) {
         throw new Error('Blocked by the browser because this page was opened from a file (file://). ' +
           'Security rules stop file:// pages from calling APIs, regardless of your key. ' +

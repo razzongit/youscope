@@ -86,6 +86,20 @@ YOUR TASK: decide what is actually interesting about this person, and design the
 
 Do NOT use generic section names like "Overview", "Interests", "How you changed". Those are templates. Choose the questions that THIS data answers in a way worth reading.
 
+Each section may include a "layout": an ordered list of visuals. Compose from this FIXED set only:
+
+  prose | stat | chart | table | timeline | tags
+
+  chart needs {chart, data}:
+    area  + monthlyVolume | searchArc | silence
+    bars  + groupTotals | abandoned | longReturns | eras | trajectories
+    clock + hours
+    heatmap + dailyCounts
+    stream + quarterlyShares
+  stat needs {facts:[keys]}: totalWatched channels spanDays searches nightShare
+    peakHour abandoned longReturns eras coverage
+  table / timeline / tags need {data: any chart data key above}
+
 Return JSON:
 {
   "headline": "one sentence, under 20 words, the single most striking true thing here",
@@ -93,7 +107,8 @@ Return JSON:
     {
       "title": "a specific question or claim, e.g. 'The year the searches stopped'",
       "intent": "what this section establishes",
-      "citesFacts": ["names of the fact fields this section rests on, e.g. searchArc, silences, returns"]
+      "citesFacts": ["fact fields this rests on, e.g. searchArc, silences, longReturns"],
+      "layout": [{"type":"chart","chart":"area","data":"searchArc"}]
     }
   ],
   "skip": "one sentence naming something you deliberately did NOT report, and why"
@@ -101,7 +116,12 @@ Return JSON:
 
 Rules:
 - 3-6 sections. Every one must rest on at least one named fact field.
-- Prefer facts with sharp contrast: returns after long gaps, silences, clusters that shrank, arcs that turned.
+- Use 0-3 blocks per section. A block must earn its place: only include one when the shape
+  of the data is the point (a trend, a spike, a cluster of dates). Prose alone is often right.
+- Match the block to the data. Do not ask for a clock from anything but "hours", or a
+  heatmap from anything but "dailyCounts".
+- Prefer facts with sharp contrast: returns after long gaps, silences, clusters that shrank,
+  arcs that turned.
 - If the facts are thin, say fewer things. Do not pad.
 - JSON only, no fences.`;
   }
@@ -208,7 +228,12 @@ Rules:
         const evidence = gatherEvidence(s, facts);
         const body = await call(sectionPrompt(s, facts, counts, evidence), 1200, false, s.title);
         if (body && String(body).trim()) {
-          sections.push({ title: s.title, body: String(body).trim(), cites: s.citesFacts || [] });
+          sections.push({
+            title: s.title,
+            body: String(body).trim(),
+            cites: s.citesFacts || [],
+            layout: validateLayout(s.layout),
+          });
         }
       } catch (e) {
         sections.push({ title: s.title, body: null, error: e.message });
@@ -225,6 +250,25 @@ Rules:
       skipped: struct.skip || null,
       noticed: taxOut.noticed || null,
     };
+  }
+
+  /* Keep only blocks the renderer can actually draw. The model is composing
+   * from a fixed vocabulary, so anything outside it is a bug — drop silently
+   * rather than rendering a broken panel. */
+  function validateLayout(layout) {
+    if (!Array.isArray(layout)) return [];
+    return layout.filter((b) => {
+      if (!b || typeof b !== 'object') return false;
+      const t = String(b.type || '').toLowerCase();
+      return ['prose', 'stat', 'chart', 'table', 'timeline', 'tags'].includes(t);
+    }).slice(0, 4).map((b) => ({
+      type: String(b.type).toLowerCase(),
+      chart: b.chart ? String(b.chart).toLowerCase() : undefined,
+      data: b.data ? String(b.data) : undefined,
+      facts: Array.isArray(b.facts) ? b.facts.filter((x) => typeof x === 'string').slice(0, 4) : undefined,
+      limit: b.limit ? Number(b.limit) : undefined,
+      caption: b.caption ? String(b.caption).slice(0, 120) : undefined,
+    }));
   }
 
   /* When the model cannot propose a structure, build one from whichever facts
@@ -312,5 +356,5 @@ Rules:
     return lines.length ? lines.join('\n') : null;
   }
 
-  return { run, taxonomyPrompt, structurePrompt, sectionPrompt, slimFacts };
+  return { run, taxonomyPrompt, structurePrompt, sectionPrompt, slimFacts, validateLayout };
 });

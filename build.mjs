@@ -26,6 +26,7 @@ const scripts = [
   'engine/retaxonomise.js',
   'engine/zip.js',
   'web/charts.js',
+  'web/blocks.js',
   'web/portrait.js',
   'web/settings.js',
   'web/app.js',
