@@ -3287,7 +3287,8 @@ Rules:
       const sample = pickSpread(c.titles, 14);
 
       classified.push({
-        channels: c.members.slice(0, 12),
+        channels: c.members.slice(0, 12),   // for the prompt (kept small)
+        allChannels: c.members,             // for recomputing statistics
         channelCount: c.members.length,
         count: c.events.length,
         share: +((100 * c.events.length) / usable.length).toFixed(1),
@@ -3313,6 +3314,7 @@ Rules:
         const times = rEvents.map((e) => e.ts).filter(Boolean).sort((a, b) => a - b);
         classified.push({
           channels: residual.slice(0, 12).map((g) => g.channel),
+          allChannels: residual.map((g) => g.channel),
           channelCount: residual.length,
           count: rEvents.length,
           share: +((100 * rEvents.length) / usable.length).toFixed(1),
@@ -3782,13 +3784,19 @@ Rules:
       clusters: (t.clusterIds || []).map((id) => clusters[id]).filter(Boolean),
     })).filter((t) => t.clusters.length);
 
-    const counts = taxonomy.map((t) => ({
-      name: t.name, definition: t.definition, weight: t.weight,
-      videos: t.clusters.reduce((n, c) => n + c.count, 0),
-      share: +t.clusters.reduce((n, c) => n + c.share, 0).toFixed(1),
-      channels: [...new Set(t.clusters.flatMap((c) => c.channels))].slice(0, 8),
-      terms: [...new Set(t.clusters.flatMap((c) => c.terms || []))].slice(0, 10),
-    })).sort((a, b) => b.videos - a.videos);
+    const counts = taxonomy.map((t) => {
+      // Full channel membership is required to recompute the charts on this
+      // taxonomy later; only the display copies are trimmed.
+      const allChannels = [...new Set(t.clusters.flatMap((c) => c.channels || []))];
+      return {
+        name: t.name, definition: t.definition, weight: t.weight,
+        videos: t.clusters.reduce((n, c) => n + c.count, 0),
+        share: +t.clusters.reduce((n, c) => n + c.share, 0).toFixed(1),
+        channels: allChannels.slice(0, 8),
+        allChannels,
+        terms: [...new Set(t.clusters.flatMap((c) => c.terms || []))].slice(0, 10),
+      };
+    }).sort((a, b) => b.videos - a.videos);
 
     // 2. structure
     onStage('Deciding what is worth saying');
@@ -3915,6 +3923,230 @@ Rules:
   }
 
   return { run, taxonomyPrompt, structurePrompt, sectionPrompt, slimFacts };
+});
+
+</script>
+<script>
+/* YouScope — retaxonomise.js
+ * Recompute every statistic against the model's taxonomy instead of the
+ * preset 22 categories.
+ *
+ * Why this exists: the AI names the person's interests, but the charts were
+ * still drawn from taxonomy.js. That made the personalisation cosmetic — the
+ * labels changed and the numbers did not. This module makes the AI's grouping
+ * the one the charts actually use.
+ *
+ * Input:  raw events + the model's taxonomy (each group carrying its clusters,
+ *         and each cluster carrying its channel list).
+ * Output: the same shape analytics.js produces, so views need no rewrite.
+ */
+(function (root, factory) {
+  if (typeof module === 'object' && module.exports) module.exports = factory();
+  else root.YSRetax = factory();
+})(typeof self !== 'undefined' ? self : this, function () {
+  'use strict';
+
+  const DAY = 86400000;
+
+  /* Build channel → groupName from the model's taxonomy. */
+  /* Accept both shapes:
+   *   live run  : [{name, clusters: [{channels: [...]}]}]
+   *   saved JSON: [{name, channels: [...], terms: [...]}]
+   * Returns channel → group plus a term → group index used as a fallback when
+   * the channel list is truncated (a saved report keeps only ~8 per group). */
+  function buildIndex(taxonomy) {
+    const byChannel = new Map();
+    const byTerm = new Map();
+    for (const group of taxonomy) {
+      const chans = [];
+      for (const cluster of (group.clusters || [])) {
+        // allChannels is the full membership; channels is the prompt-sized sample.
+        chans.push(...(cluster.allChannels || cluster.channels || []));
+      }
+      chans.push(...(group.allChannels || []));
+      chans.push(...(group.channels || []));
+      for (const ch of chans) {
+        const key = String(ch).replace(/\s*-\s*Topic$/i, '').trim().toLowerCase();
+        if (key && !byChannel.has(key)) byChannel.set(key, group.name);
+      }
+      for (const term of (group.terms || [])) {
+        const t = String(term).toLowerCase().trim();
+        if (t && !byTerm.has(t)) byTerm.set(t, group.name);
+      }
+    }
+    return { byChannel, byTerm };
+  }
+
+  function channelIndex(taxonomy) {
+    return buildIndex(taxonomy).byChannel;
+  }
+
+  /* Resolve one event to a group: channel first, then title vocabulary. */
+  function classifyEvent(e, idx) {
+    if (e.channel) {
+      const key = String(e.channel).replace(/\s*-\s*Topic$/i, '').trim().toLowerCase();
+      if (idx.byChannel.has(key)) return idx.byChannel.get(key);
+    }
+    if (e.title && idx.byTerm.size) {
+      const words = String(e.title).toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length >= 3);
+      let best = null, bestHits = 0;
+      const seen = new Set();
+      for (const w of words) {
+        if (seen.has(w)) continue;
+        seen.add(w);
+        const g = idx.byTerm.get(w);
+        if (!g) continue;
+        // count how many of this group's terms appear in the title
+        let hits = 0;
+        for (const x of words) if (idx.byTerm.get(x) === g) hits++;
+        if (hits > bestHits) { bestHits = hits; best = g; }
+      }
+      if (best && bestHits >= 2) return best;
+    }
+    return null;
+  }
+
+  /**
+   * Recompute interests, quarterly evolution and trajectories under the AI's
+   * grouping.
+   *
+   * @param data     parsed takeout {watch, search, ...}
+   * @param profile  the analytics profile (used for timezone + totals)
+   * @param taxonomy the model's groups: [{name, definition, weight, clusters:[{channels}]}]
+   * @param opts     {tzOffsetMin}
+   */
+  function build(data, profile, taxonomy, opts) {
+    opts = opts || {};
+    const tz = opts.tzOffsetMin !== undefined ? opts.tzOffsetMin
+      : ((profile.timezone && profile.timezone.offsetMin) || 0);
+
+    const events = (data.watch || []).filter((e) => !e.ad && e.ts);
+    const idx = buildIndex(taxonomy);
+
+    // colour per group — deterministic so re-runs look identical
+    const palette = ['#7dffb3', '#ffc46b', '#b39dff', '#6fc7ff', '#ff8a65', '#81c784',
+      '#f06292', '#ffd54f', '#4fc3f7', '#ba68c8', '#aed581', '#9575cd'];
+    const colour = new Map();
+    taxonomy.forEach((g, i) => colour.set(g.name, palette[i % palette.length]));
+
+    const UNMATCHED = 'Everything else';
+
+    /* ── interests ─────────────────────────────────────────────── */
+    const catCount = new Map();
+    const catChannels = new Map();
+    let matched = 0;
+
+    for (const e of events) {
+      const hit = classifyEvent(e, idx);
+      const group = hit || UNMATCHED;
+      if (hit) matched++;
+      catCount.set(group, (catCount.get(group) || 0) + 1);
+      if (e.channel) {
+        if (!catChannels.has(group)) catChannels.set(group, new Map());
+        const m = catChannels.get(group);
+        const name = String(e.channel).replace(/\s*-\s*Topic$/i, '').trim();
+        m.set(name, (m.get(name) || 0) + 1);
+      }
+    }
+
+    const total = events.length || 1;
+    const defByName = new Map(taxonomy.map((g) => [g.name, g.definition]));
+
+    const cats = [...catCount.entries()].map(([name, count]) => ({
+      id: name,
+      label: name,
+      definition: defByName.get(name) || '',
+      color: colour.get(name) || '#8a9aa8',
+      count,
+      share: +((100 * count) / total).toFixed(1),
+      topChannels: [...(catChannels.get(name) || new Map()).entries()]
+        .sort((a, b) => b[1] - a[1]).slice(0, 5)
+        .map(([ch, n]) => ({ name: ch, n })),
+    })).sort((a, b) => b.count - a.count);
+
+    const interests = {
+      cats,
+      classified: matched,
+      coverage: +((100 * matched) / total).toFixed(1),
+      source: 'ai-taxonomy',
+    };
+
+    /* ── evolution by quarter ──────────────────────────────────── */
+    const byQ = new Map();
+    for (const e of events) {
+      const d = new Date(e.ts + tz * 60000);
+      const q = d.getUTCFullYear() + '-Q' + (Math.floor(d.getUTCMonth() / 3) + 1);
+      if (!byQ.has(q)) byQ.set(q, { total: 0, cats: new Map() });
+      const o = byQ.get(q);
+      o.total++;
+      const hit2 = classifyEvent(e, idx);
+      const group = hit2 || UNMATCHED;
+      o.cats.set(group, (o.cats.get(group) || 0) + 1);
+    }
+
+    const quarters = [...byQ.entries()].sort((a, b) => (a[0] < b[0] ? -1 : 1)).map(([q, o]) => ({
+      quarter: q,
+      total: o.total,
+      cats: [...o.cats.entries()].map(([id, n]) => ({
+        id, n, share: +((100 * n) / o.total).toFixed(1),
+      })).sort((a, b) => b.n - a.n),
+    }));
+
+    /* ── trajectories, same rules as analytics.js ───────────────── */
+    const ids = new Set();
+    for (const q of quarters) for (const c of q.cats) ids.add(c.id);
+    const nQ = quarters.length;
+    const trajectories = [...ids].map((id) => {
+      const series = quarters.map((q) => {
+        const hit = q.cats.find((c) => c.id === id);
+        return hit ? hit.share : 0;
+      });
+      const counts = series.map((s, i) => (s * quarters[i].total) / 100);
+      const totalN = Math.round(counts.reduce((a, b) => a + b, 0));
+      const active = counts.filter((c) => c > 0).length;
+      const firstHalf = counts.slice(0, Math.ceil(nQ / 2)).reduce((a, b) => a + b, 0);
+      const secondHalf = counts.slice(Math.floor(nQ / 2)).reduce((a, b) => a + b, 0);
+
+      let trajectory;
+      const material = totalN >= 20;
+      if (!material) trajectory = 'minor';
+      else if (nQ < 5) {
+        if (nQ >= 3 && counts[nQ - 1] > counts[0] * 1.8) trajectory = 'rising';
+        else if (nQ >= 3 && counts[nQ - 1] * 1.8 < counts[0]) trajectory = 'fading';
+        else trajectory = 'steady';
+      } else if (active === nQ) trajectory = 'persistent';
+      else if (secondHalf > firstHalf * 1.4) trajectory = 'rising';
+      else if (secondHalf === 0 && firstHalf > 0) trajectory = 'faded';
+      else if (firstHalf > secondHalf * 1.4) trajectory = 'fading';
+      else trajectory = 'steady';
+
+      return {
+        id, label: id,
+        color: colour.get(id) || '#8a9aa8',
+        series,
+        counts: counts.map((c) => Math.round(c)),
+        total: totalN,
+        activeQuarters: active,
+        trajectory,
+      };
+    }).sort((a, b) => b.total - a.total);
+
+    return { interests, evolution: { quarters, trajectories }, source: 'ai-taxonomy' };
+  }
+
+  /* Convenience: apply the recomputation onto a profile object, returning a
+   * new profile so the fixed-taxonomy version stays available for comparison. */
+  function applyToProfile(profile, data, taxonomy, opts) {
+    const r = build(data, profile, taxonomy, opts);
+    return {
+      ...profile,
+      interests: r.interests,
+      evolution: r.evolution,
+      taxonomySource: 'ai-taxonomy',
+    };
+  }
+
+  return { build, applyToProfile, channelIndex, buildIndex, classifyEvent };
 });
 
 </script>
@@ -4788,6 +5020,8 @@ Rules:
         const done = h('div', { style: 'margin-top:16px' });
         renderPersonalResult(done, result);
         out.appendChild(done);
+        // Hand the model's grouping to the app so the charts rebuild on it.
+        if (ctx.onPersonalized) ctx.onPersonalized(result);
       } catch (e) {
         showError(prog, e.message);
         if (!listEl.children.length) live.remove();
@@ -5533,6 +5767,7 @@ Rules:
   const S = {
     profile: null, data: null, insights: null, ai: null, aiCfg: null, fileName: '',
     facts: null, clusters: null, personalized: null, mode: null, pending: null,
+    aiProfile: null,   // profile recomputed on the model's taxonomy
   };
   const C = () => window.YSCharts;
 
@@ -5878,7 +6113,9 @@ Rules:
     const views = { overview: viewOverview, interests: viewInterests, evolution: viewEvolution,
       rhythm: viewRhythm, channels: viewChannels, music: viewMusic, search: viewSearch,
       portrait: viewPortrait, settings: viewSettings };
-    (views[id] || viewOverview)(m, p, opts || {});
+    const prof = (S.aiProfile && ['overview', 'interests', 'evolution'].includes(id))
+      ? S.aiProfile : p;
+    (views[id] || viewOverview)(m, prof, opts || {});
     window.scrollTo({ top: 0, behavior: 'instant' });
   }
 
@@ -5906,6 +6143,7 @@ Rules:
     m.innerHTML = topbar('The shape of your attention', 'YouScope · overview', [
       rangeChip(p),
       { text: fmt(p.counts.watchEvents) + ' watches', cls: 'good' },
+      ...(p.taxonomySource === 'ai-taxonomy' ? [{ text: 'your taxonomy', cls: 'good' }] : []),
       { text: p.timezone.label || 'UTC' },
     ]);
 
@@ -5986,9 +6224,12 @@ Rules:
   /* ── INTERESTS ── */
   function viewInterests(m, p) {
     const C = window.YSCharts;
-    m.innerHTML = topbar('What you actually care about', 'YouScope · interests', [
+    m.innerHTML = topbar(
+      p.taxonomySource === 'ai-taxonomy' ? 'What you actually care about' : 'What you actually care about',
+      p.taxonomySource === 'ai-taxonomy' ? 'YouScope · your own taxonomy' : 'YouScope · interests', [
       { text: p.interests.coverage + '% classified', cls: p.interests.coverage > 80 ? 'good' : 'warn' },
-      { text: p.interests.cats.length + ' categories' },
+      { text: p.interests.cats.length + (p.taxonomySource === 'ai-taxonomy' ? ' groups' : ' categories') },
+      ...(p.taxonomySource === 'ai-taxonomy' ? [{ text: 'named by the model', cls: 'good' }] : []),
     ]);
     const wrap = h('div', { class: 'reveal' });
     m.appendChild(wrap);
@@ -6032,8 +6273,10 @@ Rules:
   /* ── EVOLUTION ── */
   function viewEvolution(m, p) {
     const C = window.YSCharts;
-    m.innerHTML = topbar('How you changed', 'YouScope · evolution', [
+    m.innerHTML = topbar('How you changed',
+      p.taxonomySource === 'ai-taxonomy' ? 'YouScope · your own taxonomy' : 'YouScope · evolution', [
       { text: p.evolution.quarters.length + ' quarters' },
+      ...(p.taxonomySource === 'ai-taxonomy' ? [{ text: 'your groups', cls: 'good' }] : []),
       rangeChip(p),
     ]);
     const wrap = h('div', { class: 'reveal' });
@@ -6302,6 +6545,69 @@ Rules:
     wrap.appendChild(grid);
   }
 
+  /* Called when the personalised run finishes: rebuild every statistic against
+   * the model's grouping and repaint whichever view is open. */
+  function adoptTaxonomy(personalized) {
+    if (!personalized || !personalized.taxonomy || !S.data) return false;
+    try {
+      const tz = (S.profile.timezone && S.profile.timezone.offsetMin) || 0;
+      const r = window.YSRetax.build(S.data, S.profile, personalized.taxonomy, { tzOffsetMin: tz });
+      const base = S.profile;
+      S.aiProfile = {
+        ...base,
+        interests: r.interests,
+        evolution: r.evolution,
+        taxonomySource: 'ai-taxonomy',
+        taxonomyNames: personalized.taxonomy.map((t) => t.name),
+      };
+      S.personalized = personalized;
+      try {
+        sessionStorage.setItem('youscope.aiProfile', JSON.stringify({
+          aiProfile: S.aiProfile,
+          taxonomyNames: S.aiProfile.taxonomyNames,
+        }));
+      } catch (e) { /* quota */ }
+      return true;
+    } catch (e) {
+      console.warn('could not adopt taxonomy:', e.message);
+      return false;
+    }
+  }
+
+  /* Which profile should the charts use right now? */
+  function activeProfile() {
+    const id = (location.hash || '#overview').slice(1) || 'overview';
+    const aiAware = ['overview', 'interests', 'evolution'];
+    return (S.aiProfile && aiAware.includes(id)) ? S.aiProfile : S.profile;
+  }
+
+  /* Nudge the user that the numbers just changed underneath them. */
+  function flashTaxonomyNotice() {
+    const bar = h('div', {
+      id: 'tax-notice',
+      style: 'position:fixed;left:50%;transform:translateX(-50%);bottom:26px;z-index:9998;' +
+        'background:rgba(6,10,8,.97);border:1px solid rgba(125,255,179,.45);border-radius:12px;' +
+        'padding:13px 18px;display:flex;gap:14px;align-items:center;box-shadow:0 16px 48px rgba(0,0,0,.6)',
+    });
+    bar.innerHTML = `<span style="width:7px;height:7px;border-radius:50%;background:var(--accent);
+        box-shadow:0 0 10px var(--accent);flex:0 0 7px"></span>
+      <span style="font-size:.86rem">Your interest groups are now the model's, not the presets.
+        Charts updated.</span>
+      <button class="btn ghost sm" style="padding:5px 10px">See overview</button>
+      <button class="btn ghost sm" style="padding:5px 10px;opacity:.7">dismiss</button>`;
+    document.body.appendChild(bar);
+    const [seeBtn, closeBtn] = bar.querySelectorAll('button');
+    seeBtn.addEventListener('click', () => { location.hash = '#overview'; bar.remove(); });
+    closeBtn.addEventListener('click', () => bar.remove());
+    setTimeout(() => { if (bar.parentNode) bar.remove(); }, 14000);
+  }
+
+  /* A small inline note for views that are showing AI-derived numbers. */
+  function taxonomyBadge(p) {
+    if (!p || p.taxonomySource !== 'ai-taxonomy') return '';
+    return `<span class="chip good" title="These numbers use the interest groups the model named for you, not the built-in categories.">your taxonomy</span>`;
+  }
+
   /* ── PORTRAIT (tiered: built-in / digest / full) ── */
   function viewPortrait(m, p, opts) {
     m.innerHTML = topbar('The portrait', 'YouScope · what the data concludes', [
@@ -6312,6 +6618,11 @@ Rules:
     window.YSportrait.render(host, {
       profile: p, data: S.data, insights: S.insights, aiCfg: S.aiCfg,
       facts: S.facts, clusters: S.clusters, autorun: opts && opts.autorun,
+      onPersonalized: (result) => {
+        if (adoptTaxonomy(result)) {
+          flashTaxonomyNotice();
+        }
+      },
     });
   }
 
@@ -6342,6 +6653,10 @@ Rules:
           S.insights = saved.insights;
           S.facts = saved.facts || null;
           S.mode = saved.mode || null;
+          try {
+            const aiRaw = sessionStorage.getItem('youscope.aiProfile');
+            if (aiRaw) S.aiProfile = JSON.parse(aiRaw).aiProfile || null;
+          } catch (e) { /* ignore */ }
           S.data = saved.dataLight || { watch: [], search: [], subscriptions: [], comments: [], playlists: [], musicLibrary: [] };
           S.fileName = saved.fileName || '';
           restored = true;

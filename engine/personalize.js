@@ -174,13 +174,19 @@ Rules:
       clusters: (t.clusterIds || []).map((id) => clusters[id]).filter(Boolean),
     })).filter((t) => t.clusters.length);
 
-    const counts = taxonomy.map((t) => ({
-      name: t.name, definition: t.definition, weight: t.weight,
-      videos: t.clusters.reduce((n, c) => n + c.count, 0),
-      share: +t.clusters.reduce((n, c) => n + c.share, 0).toFixed(1),
-      channels: [...new Set(t.clusters.flatMap((c) => c.channels))].slice(0, 8),
-      terms: [...new Set(t.clusters.flatMap((c) => c.terms || []))].slice(0, 10),
-    })).sort((a, b) => b.videos - a.videos);
+    const counts = taxonomy.map((t) => {
+      // Full channel membership is required to recompute the charts on this
+      // taxonomy later; only the display copies are trimmed.
+      const allChannels = [...new Set(t.clusters.flatMap((c) => c.channels || []))];
+      return {
+        name: t.name, definition: t.definition, weight: t.weight,
+        videos: t.clusters.reduce((n, c) => n + c.count, 0),
+        share: +t.clusters.reduce((n, c) => n + c.share, 0).toFixed(1),
+        channels: allChannels.slice(0, 8),
+        allChannels,
+        terms: [...new Set(t.clusters.flatMap((c) => c.terms || []))].slice(0, 10),
+      };
+    }).sort((a, b) => b.videos - a.videos);
 
     // 2. structure
     onStage('Deciding what is worth saying');

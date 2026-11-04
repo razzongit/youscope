@@ -8,7 +8,7 @@
     "start": "node server.mjs",
     "server": "node server.mjs",
     "cli": "node cli.mjs",
-    "test": "node tests/file-protocol-test.js && node tests/ui-test.js && node tests/openrouter-test.js && node tests/proxy-test.js && node tests/personalize-test.js && node tests/gate-test.js",
+    "test": "node tests/file-protocol-test.js && node tests/ui-test.js && node tests/openrouter-test.js && node tests/proxy-test.js && node tests/personalize-test.js && node tests/gate-test.js && node tests/retaxonomise-test.js",
     "test:mock": "node tests/run-mock.js",
     "build": "node build.mjs"
   },

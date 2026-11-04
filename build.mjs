@@ -23,6 +23,7 @@ const scripts = [
   'engine/cluster.js',
   'engine/facts.js',
   'engine/personalize.js',
+  'engine/retaxonomise.js',
   'engine/zip.js',
   'web/charts.js',
   'web/portrait.js',

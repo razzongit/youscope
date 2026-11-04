@@ -421,6 +421,8 @@
         const done = h('div', { style: 'margin-top:16px' });
         renderPersonalResult(done, result);
         out.appendChild(done);
+        // Hand the model's grouping to the app so the charts rebuild on it.
+        if (ctx.onPersonalized) ctx.onPersonalized(result);
       } catch (e) {
         showError(prog, e.message);
         if (!listEl.children.length) live.remove();

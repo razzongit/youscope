@@ -31,6 +31,7 @@
   const S = {
     profile: null, data: null, insights: null, ai: null, aiCfg: null, fileName: '',
     facts: null, clusters: null, personalized: null, mode: null, pending: null,
+    aiProfile: null,   // profile recomputed on the model's taxonomy
   };
   const C = () => window.YSCharts;
 
@@ -376,7 +377,9 @@
     const views = { overview: viewOverview, interests: viewInterests, evolution: viewEvolution,
       rhythm: viewRhythm, channels: viewChannels, music: viewMusic, search: viewSearch,
       portrait: viewPortrait, settings: viewSettings };
-    (views[id] || viewOverview)(m, p, opts || {});
+    const prof = (S.aiProfile && ['overview', 'interests', 'evolution'].includes(id))
+      ? S.aiProfile : p;
+    (views[id] || viewOverview)(m, prof, opts || {});
     window.scrollTo({ top: 0, behavior: 'instant' });
   }
 
@@ -404,6 +407,7 @@
     m.innerHTML = topbar('The shape of your attention', 'YouScope · overview', [
       rangeChip(p),
       { text: fmt(p.counts.watchEvents) + ' watches', cls: 'good' },
+      ...(p.taxonomySource === 'ai-taxonomy' ? [{ text: 'your taxonomy', cls: 'good' }] : []),
       { text: p.timezone.label || 'UTC' },
     ]);
 
@@ -484,9 +488,12 @@
   /* ── INTERESTS ── */
   function viewInterests(m, p) {
     const C = window.YSCharts;
-    m.innerHTML = topbar('What you actually care about', 'YouScope · interests', [
+    m.innerHTML = topbar(
+      p.taxonomySource === 'ai-taxonomy' ? 'What you actually care about' : 'What you actually care about',
+      p.taxonomySource === 'ai-taxonomy' ? 'YouScope · your own taxonomy' : 'YouScope · interests', [
       { text: p.interests.coverage + '% classified', cls: p.interests.coverage > 80 ? 'good' : 'warn' },
-      { text: p.interests.cats.length + ' categories' },
+      { text: p.interests.cats.length + (p.taxonomySource === 'ai-taxonomy' ? ' groups' : ' categories') },
+      ...(p.taxonomySource === 'ai-taxonomy' ? [{ text: 'named by the model', cls: 'good' }] : []),
     ]);
     const wrap = h('div', { class: 'reveal' });
     m.appendChild(wrap);
@@ -530,8 +537,10 @@
   /* ── EVOLUTION ── */
   function viewEvolution(m, p) {
     const C = window.YSCharts;
-    m.innerHTML = topbar('How you changed', 'YouScope · evolution', [
+    m.innerHTML = topbar('How you changed',
+      p.taxonomySource === 'ai-taxonomy' ? 'YouScope · your own taxonomy' : 'YouScope · evolution', [
       { text: p.evolution.quarters.length + ' quarters' },
+      ...(p.taxonomySource === 'ai-taxonomy' ? [{ text: 'your groups', cls: 'good' }] : []),
       rangeChip(p),
     ]);
     const wrap = h('div', { class: 'reveal' });
@@ -800,6 +809,69 @@
     wrap.appendChild(grid);
   }
 
+  /* Called when the personalised run finishes: rebuild every statistic against
+   * the model's grouping and repaint whichever view is open. */
+  function adoptTaxonomy(personalized) {
+    if (!personalized || !personalized.taxonomy || !S.data) return false;
+    try {
+      const tz = (S.profile.timezone && S.profile.timezone.offsetMin) || 0;
+      const r = window.YSRetax.build(S.data, S.profile, personalized.taxonomy, { tzOffsetMin: tz });
+      const base = S.profile;
+      S.aiProfile = {
+        ...base,
+        interests: r.interests,
+        evolution: r.evolution,
+        taxonomySource: 'ai-taxonomy',
+        taxonomyNames: personalized.taxonomy.map((t) => t.name),
+      };
+      S.personalized = personalized;
+      try {
+        sessionStorage.setItem('youscope.aiProfile', JSON.stringify({
+          aiProfile: S.aiProfile,
+          taxonomyNames: S.aiProfile.taxonomyNames,
+        }));
+      } catch (e) { /* quota */ }
+      return true;
+    } catch (e) {
+      console.warn('could not adopt taxonomy:', e.message);
+      return false;
+    }
+  }
+
+  /* Which profile should the charts use right now? */
+  function activeProfile() {
+    const id = (location.hash || '#overview').slice(1) || 'overview';
+    const aiAware = ['overview', 'interests', 'evolution'];
+    return (S.aiProfile && aiAware.includes(id)) ? S.aiProfile : S.profile;
+  }
+
+  /* Nudge the user that the numbers just changed underneath them. */
+  function flashTaxonomyNotice() {
+    const bar = h('div', {
+      id: 'tax-notice',
+      style: 'position:fixed;left:50%;transform:translateX(-50%);bottom:26px;z-index:9998;' +
+        'background:rgba(6,10,8,.97);border:1px solid rgba(125,255,179,.45);border-radius:12px;' +
+        'padding:13px 18px;display:flex;gap:14px;align-items:center;box-shadow:0 16px 48px rgba(0,0,0,.6)',
+    });
+    bar.innerHTML = `<span style="width:7px;height:7px;border-radius:50%;background:var(--accent);
+        box-shadow:0 0 10px var(--accent);flex:0 0 7px"></span>
+      <span style="font-size:.86rem">Your interest groups are now the model's, not the presets.
+        Charts updated.</span>
+      <button class="btn ghost sm" style="padding:5px 10px">See overview</button>
+      <button class="btn ghost sm" style="padding:5px 10px;opacity:.7">dismiss</button>`;
+    document.body.appendChild(bar);
+    const [seeBtn, closeBtn] = bar.querySelectorAll('button');
+    seeBtn.addEventListener('click', () => { location.hash = '#overview'; bar.remove(); });
+    closeBtn.addEventListener('click', () => bar.remove());
+    setTimeout(() => { if (bar.parentNode) bar.remove(); }, 14000);
+  }
+
+  /* A small inline note for views that are showing AI-derived numbers. */
+  function taxonomyBadge(p) {
+    if (!p || p.taxonomySource !== 'ai-taxonomy') return '';
+    return `<span class="chip good" title="These numbers use the interest groups the model named for you, not the built-in categories.">your taxonomy</span>`;
+  }
+
   /* ── PORTRAIT (tiered: built-in / digest / full) ── */
   function viewPortrait(m, p, opts) {
     m.innerHTML = topbar('The portrait', 'YouScope · what the data concludes', [
@@ -810,6 +882,11 @@
     window.YSportrait.render(host, {
       profile: p, data: S.data, insights: S.insights, aiCfg: S.aiCfg,
       facts: S.facts, clusters: S.clusters, autorun: opts && opts.autorun,
+      onPersonalized: (result) => {
+        if (adoptTaxonomy(result)) {
+          flashTaxonomyNotice();
+        }
+      },
     });
   }
 
@@ -840,6 +917,10 @@
           S.insights = saved.insights;
           S.facts = saved.facts || null;
           S.mode = saved.mode || null;
+          try {
+            const aiRaw = sessionStorage.getItem('youscope.aiProfile');
+            if (aiRaw) S.aiProfile = JSON.parse(aiRaw).aiProfile || null;
+          } catch (e) { /* ignore */ }
           S.data = saved.dataLight || { watch: [], search: [], subscriptions: [], comments: [], playlists: [], musicLibrary: [] };
           S.fileName = saved.fileName || '';
           restored = true;

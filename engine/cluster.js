@@ -171,7 +171,8 @@
       const sample = pickSpread(c.titles, 14);
 
       classified.push({
-        channels: c.members.slice(0, 12),
+        channels: c.members.slice(0, 12),   // for the prompt (kept small)
+        allChannels: c.members,             // for recomputing statistics
         channelCount: c.members.length,
         count: c.events.length,
         share: +((100 * c.events.length) / usable.length).toFixed(1),
@@ -197,6 +198,7 @@
         const times = rEvents.map((e) => e.ts).filter(Boolean).sort((a, b) => a - b);
         classified.push({
           channels: residual.slice(0, 12).map((g) => g.channel),
+          allChannels: residual.map((g) => g.channel),
           channelCount: residual.length,
           count: rEvents.length,
           share: +((100 * rEvents.length) / usable.length).toFixed(1),
