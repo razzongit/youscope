@@ -483,9 +483,23 @@ details[open] summary { margin-bottom: 4px; }
       .replace(/&amp;/g, '&');
   }
 
+  /* Google's newer exports separate the timezone with U+202F NARROW NO-BREAK
+   * SPACE instead of a normal space ("3:24:29 PM\u202FIST"). Every regex here
+   * expects U+0020, so a whole export parsed as undated until this normaliser
+   * was added. Verified against takeout-20261103T130613Z-1-001.zip. */
+  function normalizeSpaces(s) {
+    if (!s) return s;
+    return String(s)
+      .replace(/[\u00A0\u2007\u202F\uFEFF]/g, ' ')  // nbsp, figure space, narrow nbsp, BOM
+      .replace(/[\u200B-\u200D\u2060]/g, '')         // zero-width chars
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
   function parseTimestamp(str) {
     // "25 Oct 2026, 21:51:26 IST" | "25 Oct 2026, 21:51:26 UTC+5:30" | "Oct 25, 2026, 9:51:26 PM IST"
     if (!str) return null;
+    str = normalizeSpaces(str);
     const m = str.match(/^(\d{1,2}) ([A-Z][a-z]+) (\d{4}), (\d{1,2}):(\d{2}):(\d{2}) (.+)$/);
     if (m) {
       const mon = MONTHS[m[2].toLowerCase()];
@@ -532,7 +546,7 @@ details[open] summary { margin-bottom: 4px; }
     for (const b of blocks) {
       const i = b.indexOf(CELL_OPEN);
       if (i < 0) continue;
-      const cell = b.slice(i + CELL_OPEN.length, b.indexOf('</div>', i));
+      const cell = normalizeSpaces(b.slice(i + CELL_OPEN.length, b.indexOf('</div>', i)));
       const header = (b.match(/mdl-typography--title">([^<]*)/) || [])[1] || '';
       const product = header.trim();
       // <br> separated segments
@@ -566,7 +580,7 @@ details[open] summary { margin-bottom: 4px; }
         }
       }
       for (let p = 1; p < parts.length; p++) {
-        const seg = parts[p];
+        const seg = normalizeSpaces(parts[p]);
         if (seg.startsWith('<a href="https://www.youtube.com/channel/UC')) {
           const cm = seg.match(/<a href="([^"]+)"[^>]*>([^<]*)<\/a>/);
           if (cm) { channelUrl = cm[1]; channelId = (cm[1].match(/UC[\w-]+/) || [])[0]; channel = decodeEntities(cm[2]).trim(); }
@@ -711,7 +725,7 @@ details[open] summary { margin-bottom: 4px; }
   }
 
   return {
-    parseWatchHistory, parseSearchHistory, parseCsv,
+    normalizeSpaces, parseWatchHistory, parseSearchHistory, parseCsv,
     parseSubscriptionsCsv, parseCommentsCsv, parsePlaylistsCsv, parseMusicLibraryCsv,
     parseTakeoutFiles, parseTimestamp, decodeEntities,
   };
