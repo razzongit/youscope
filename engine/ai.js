@@ -309,10 +309,11 @@ Reply with JSON only, matching this shape:
       '\n\nWrite the portrait now. Return JSON only.';
 
     onStage && onStage('Calling ' + ((PRESETS[cfg.provider] || {}).label || cfg.provider || 'model'));
+    const budget = Math.max(2000, Number(cfg.maxTokens) || 0);
     const { content, usage, model } = await chat(cfg, [
       { role: 'system', content: SYSTEM },
       { role: 'user', content: userMsg },
-    ], { json: true, maxTokens: 2000 });
+    ], { json: true, maxTokens: budget });
 
     onStage && onStage('Parsing response');
     const parsed = extractJson(content);
@@ -321,7 +322,7 @@ Reply with JSON only, matching this shape:
       const retry = await chat(cfg, [
         { role: 'system', content: SYSTEM },
         { role: 'user', content: userMsg + '\n\nReturn valid JSON. No markdown fences.' },
-      ], { json: true, maxTokens: 2000 });
+      ], { json: true, maxTokens: budget });
       const p2 = extractJson(retry.content);
       if (!p2) throw new Error('The model did not return valid JSON. Try a stronger model (e.g. a 70B or Gemini Flash).');
       p2.source = 'ai'; p2.model = retry.model;

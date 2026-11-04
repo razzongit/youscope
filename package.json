@@ -2,15 +2,30 @@
   "name": "youscope",
   "version": "1.0.0",
   "private": true,
-  "description": "Private, client-side analyzer for your YouTube Takeout history",
+  "description": "Read your Google Takeout YouTube history locally. Interests, evolution, portrait. Any OpenAI-compatible endpoint.",
   "type": "commonjs",
   "scripts": {
-    "build": "node build.mjs",
+    "start": "node cli.mjs",
+    "test": "node tests/file-protocol-test.js && node tests/ui-test.js && node tests/openrouter-test.js",
+    "test:mock": "node tests/run-mock.js",
     "serve": "node serve.mjs",
-    "test": "node tests/file-protocol-test.js && node tests/ui-test.js",
-    "test:mock": "node tests/run-mock.js"
+    "build": "node build.mjs"
   },
   "devDependencies": {
     "jsdom": "^24.0.0"
-  }
+  },
+  "bin": {
+    "youscope": "./cli.mjs"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "files": [
+    "cli.mjs",
+    "engine/",
+    "serve.mjs",
+    ".env.example",
+    "README.md",
+    "LICENSE"
+  ]
 }

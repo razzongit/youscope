@@ -70,4 +70,5 @@ const server = http.createServer((req, res) => {
     }));
   });
 });
-server.listen(8899, () => console.log('or-mock on 8899'));
+const PORT = Number(process.env.OR_MOCK_PORT) || 8898;
+server.listen(PORT, () => console.log('or-mock on ' + PORT));

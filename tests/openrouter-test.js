@@ -4,7 +4,7 @@ const window = ensureWindow('http://localhost:8000/');
 const AI = window.YSAI;
 const OR = window.YSOR;
 
-const M = 'http://127.0.0.1:8899';
+const M = 'http://127.0.0.1:8898';
 const cfg = (model) => ({ provider: 'openrouter', baseUrl: M + '/api/v1', model, apiKey: 'sk-or-test' });
 
 const results = [];

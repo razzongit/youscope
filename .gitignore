@@ -1,3 +1,9 @@
+# Local configuration — contains your API key
+.env
+.env.local
+.env.*.local
+!/.env.example
+
 # Your Takeout export — never commit this
 takeout*.zip
 *.zip
@@ -30,3 +36,6 @@ node_modules/
 
 # Local Netlify folder
 .netlify
+reports/
+*.cpuprofile
+/tmp/
