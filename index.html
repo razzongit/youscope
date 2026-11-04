@@ -2344,7 +2344,7 @@ details[open] summary { margin-bottom: 4px; }
       temperature: 1,
       minTemperature: 0.01,
       // Thinking cannot be disabled, so every call needs output headroom.
-      tokenFloor: 8000,
+      tokenFloor: 20000,   // glm-5.3-flash cannot disable thinking; 8000 was fully consumed and returned nothing
       reasoningContent: true,
     },
     ollama: {
@@ -2546,14 +2546,15 @@ Reply with JSON only, matching this shape:
     // spent 877 reasoning then answered. So reasoning models need real headroom,
     // and the auto-router can hand us one at any time.
     let maxTokens = opts.maxTokens || 1600;
-    // Use the per-model floor measured against the live API: the auto-router
-    // may land on a model that needs 4500 tokens just to answer.
+    // OpenRouter: per-model floors measured against the live API (the auto
+    // router may land on a model needing thousands of reasoning tokens).
     if (isOpenRouter && orMod && orMod.reasoningFloor) {
       const floor = orMod.reasoningFloor(model);
       if (floor > 0) maxTokens = Math.max(maxTokens, floor);
     }
-    // Provider-level floor. Z.AI's GLM-5.3-Flash cannot disable thinking, so
-    // every request burns reasoning tokens before producing an answer.
+    // Every provider: honour a declared floor. This was previously gated on
+    // isOpenRouter, so z.ai silently used 8000 and returned empty content with
+    // finish_reason=length 100% of the time on prompts above ~2k tokens.
     if (preset.tokenFloor) maxTokens = Math.max(maxTokens, preset.tokenFloor);
 
     // Some providers reject temperature 0 outright (z.ai: range is exclusive

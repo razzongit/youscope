@@ -137,8 +137,11 @@ function detectProvider(baseUrl) {
 }
 
 const QUIRKS = {
-  // z.ai: temperature range is exclusive 0..1; thinking always on for 5.3-flash
-  zai: { minTemp: 0.01, temp: 1, tokenFloor: 8000 },
+  // z.ai: temperature range is exclusive 0..1.
+  // Its thinking mode CANNOT be disabled, and a 2,100-token prompt consumed all
+  // 8000 tokens as reasoning and returned empty content (finish_reason=length).
+  // 20000 is the measured practical floor.
+  zai: { minTemp: 0.01, temp: 1, tokenFloor: 20000 },
   openrouter: { tokenFloor: 0 },
   openai: { minTemp: 0, temp: 0.6, tokenFloor: 0 },
   gemini: { minTemp: 0, temp: 0.6, tokenFloor: 0 },

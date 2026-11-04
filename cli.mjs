@@ -504,7 +504,13 @@ async function main() {
   await writeFile(jsonPath, JSON.stringify({ meta, profile, insights, ai, personalized, facts }, null, 1), 'utf8');
 
   const secs = ((Date.now() - t0) / 1000).toFixed(1);
-  console.log(`\n✓ Done in ${secs}s${ai ? ' (with AI portrait)' : ' (local only)'}`);
+  const modeLabel = personalized ? ' (personalised)'
+    : ai ? ' (with AI portrait)'
+    : ' (local only)';
+  console.log(`\n✓ Done in ${secs}s${modeLabel}`);
+  if (!personalized && !ai && (args.personal || args.digest || args.full)) {
+    console.log('  Note: the AI step failed; reports contain the local analysis only.');
+  }
   console.log(`  ${mdPath}`);
   console.log(`  ${htmlPath}`);
   console.log(`  ${jsonPath}`);
