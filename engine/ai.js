@@ -55,6 +55,21 @@
       keysUrl: 'https://console.groq.com/keys',
       note: 'Free tier, extremely fast.',
     },
+    zai: {
+      label: 'Z.AI (GLM / Coding Plan)',
+      base: 'https://api.z.ai/api/paas/v4',
+      model: 'glm-5.3-flash',
+      freeModels: ['glm-5.3-flash', 'glm-5.3-flashx', 'glm-5.3', 'glm-5.2', 'glm-4.6'],
+      keysUrl: 'https://z.ai/manage-apikey/apikey-list',
+      note: 'GLM Coding Plan. thinking.type is always enabled on 5.3-Flash, so it spends reasoning tokens before answering — keep MAX_TOKENS generous.',
+      // z.ai rejects temperature 0 (valid range is exclusive 0..1) and
+      // recommends temperature 1 for GLM-5.3-Flash.
+      temperature: 1,
+      minTemperature: 0.01,
+      // Thinking cannot be disabled, so every call needs output headroom.
+      tokenFloor: 8000,
+      reasoningContent: true,
+    },
     ollama: {
       label: 'Ollama (local)',
       base: 'http://localhost:11434/v1',
@@ -203,11 +218,27 @@ Reply with JSON only, matching this shape:
       const floor = orMod.reasoningFloor(model);
       if (floor > 0) maxTokens = Math.max(maxTokens, floor);
     }
+    // Provider-level floor. Z.AI's GLM-5.3-Flash cannot disable thinking, so
+    // every request burns reasoning tokens before producing an answer.
+    if (preset.tokenFloor) maxTokens = Math.max(maxTokens, preset.tokenFloor);
+
+    // Some providers reject temperature 0 outright (z.ai: range is exclusive
+    // 0..1). Clamp rather than send a value that returns HTTP 400.
+    let temperature = opts.temperature !== undefined ? opts.temperature : 0.65;
+    if (preset.temperature !== undefined && opts.temperature === undefined) {
+      temperature = preset.temperature;
+    }
+    if (preset.minTemperature !== undefined && temperature < preset.minTemperature) {
+      temperature = preset.minTemperature;
+    }
+    if (preset.maxTemperature !== undefined && temperature > preset.maxTemperature) {
+      temperature = preset.maxTemperature;
+    }
 
     const body = {
       model,
       messages,
-      temperature: opts.temperature !== undefined ? opts.temperature : 0.65,
+      temperature,
       max_tokens: maxTokens,
     };
     // Only some models accept structured output. Sending it where it is

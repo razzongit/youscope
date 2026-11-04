@@ -140,17 +140,32 @@ function loadZip() {
 }
 
 /* ─── AI config from env ───────────────────────────────────────── */
+/* Detect which known provider a BASE_URL belongs to, so provider-specific
+ * quirks (temperature range, thinking modes, token floors) apply automatically.
+ * Falls back to 'custom', which imposes nothing. */
+function detectProvider(baseUrl) {
+  const u = String(baseUrl || '').toLowerCase();
+  if (/api\.z\.ai/.test(u)) return 'zai';
+  if (/openrouter\.ai/.test(u)) return 'openrouter';
+  if (/api\.openai\.com/.test(u)) return 'openai';
+  if (/generativelanguage\.googleapis\.com/.test(u)) return 'gemini';
+  if (/api\.groq\.com/.test(u)) return 'groq';
+  if (/localhost|127\.0\.0\.1|0\.0\.0\.0/.test(u)) return 'ollama';
+  return 'custom';
+}
+
 function aiConfig(env, args) {
   const baseUrl = args.baseUrl || env.BASE_URL || '';
   const model = args.model || env.MODEL || '';
   const apiKey = env.API_KEY || '';
+  const provider = env.PROVIDER || detectProvider(baseUrl);
   let extraHeaders = {};
   if (env.EXTRA_HEADERS) {
     try { extraHeaders = JSON.parse(env.EXTRA_HEADERS); }
     catch { console.warn('  ! EXTRA_HEADERS is not valid JSON — ignoring'); }
   }
   return {
-    provider: 'custom',
+    provider,
     baseUrl,
     model,
     apiKey,
@@ -289,11 +304,12 @@ async function main() {
     log(`Testing ${cfg.baseUrl} · model ${cfg.model}${cfg.apiKey ? ' (key set)' : ' (no key)'}`);
     const t0 = Date.now();
     try {
-      const r = await AI.chat({ ...cfg, provider: 'custom' },
+      const r = await AI.chat(cfg,
         [{ role: 'user', content: 'Reply with exactly: OK' }],
         // Reasoning models need headroom even to say "OK" — 16 tokens was
         // consumed entirely by hidden reasoning in testing.
-        { maxTokens: Math.max(1200, Number(env.MAX_TOKENS) || 0), temperature: 0, json: false, timeoutMs: cfg.timeoutMs });
+        // temperature is left to the provider preset: z.ai rejects 0 outright.
+        { maxTokens: Math.max(1200, Number(env.MAX_TOKENS) || 0), json: false, timeoutMs: cfg.timeoutMs });
       log(`✓ Connected in ${Date.now() - t0}ms`);
       log(`  model replied: ${JSON.stringify(String(r.content).slice(0, 60))}`);
       log(`  resolved model: ${r.model}${r.reasoningTokens ? ` (${r.reasoningTokens} reasoning tokens)` : ''}`);
@@ -359,7 +375,7 @@ async function main() {
       if (args.full) {
         log(`Full personal mode: ${Math.min(12, profile.interests.cats.length)} interests, ~13 calls`);
         ai = await D.analyzeFull(data, profile, X, correlations,
-          { ...cfg, provider: 'custom' },
+          cfg,
           {
             delayMs: cfg.delayMs,
             onStage: (s) => log('  » ' + s),
@@ -367,7 +383,7 @@ async function main() {
           });
       } else {
         log('Digest mode: 1 call');
-        ai = await AI.analyze(digest, { ...cfg, provider: 'custom' });
+        ai = await AI.analyze(digest, cfg);
       }
       if (ai && ai.error) ai = null;
     } catch (e) {

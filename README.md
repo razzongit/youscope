@@ -71,6 +71,7 @@ node cli.mjs takeout.zip --dry-run    # see the payload, send nothing
 
 | Provider | `BASE_URL` | Example `MODEL` | Cost |
 |---|---|---|---|
+| **Z.AI (GLM)** | `https://api.z.ai/api/paas/v4` | `glm-5.3-flash` | Coding Plan |
 | **OpenRouter** | `https://openrouter.ai/api/v1` | `cohere/north-mini-code:free` | free tier |
 | **OpenRouter (auto)** | `https://openrouter.ai/api/v1` | `openrouter/free` | free, but slow |
 | **OpenAI** | `https://api.openai.com/v1` | `gpt-4o-mini` | paid |
@@ -80,6 +81,21 @@ node cli.mjs takeout.zip --dry-run    # see the payload, send nothing
 | **Ollama (local)** | `http://localhost:11434/v1` | `llama3.2` | free, offline |
 | **LM Studio** | `http://localhost:1234/v1` | whatever you loaded | free, offline |
 | **vLLM** | `http://localhost:8000/v1` | your served model | free, offline |
+
+### Z.AI / GLM Coding Plan
+
+The config ships ready for z.ai. Two of its quirks are handled automatically but
+are worth understanding:
+
+- **`temperature` is exclusive 0–1.** Sending `0` returns HTTP 400. The app clamps
+  it, and defaults to `1`, which z.ai recommends for glm-5.3-flash.
+- **`thinking.type` only supports `enabled` on glm-5.3-flash** — thinking cannot be
+  turned off. Every request spends reasoning tokens before writing anything, so
+  `MAX_TOKENS` needs to be generous. The app enforces an 8000 floor for this
+  provider; 12000 is a comfortable setting for the full analysis.
+
+glm-5.3-flash has a 1M context and 128K max output, so neither is a constraint
+here. `glm-5.3-flashx` is faster but is not included in the Coding Plan.
 
 ---
 
@@ -231,6 +247,11 @@ A reasoning model ate the budget. Raise `MAX_TOKENS` to 6000–8000, or pick a n
 
 **Empty or unparseable JSON**
 The model is too small or lacks JSON mode. Try `--digest`, a 70B-class model, or one with native `response_format` support.
+
+**HTTP 400 mentioning temperature**
+Some providers reject `temperature: 0` (z.ai's range is exclusive 0–1). The app
+clamps this automatically for recognised providers. If you're on a custom proxy,
+set `PROVIDER=zai` in `.env` so the same rules apply.
 
 **429 errors**
 Free-tier per-minute cap. Raise `REQUEST_DELAY_MS`, or switch model.
