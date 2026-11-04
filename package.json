@@ -5,10 +5,11 @@
   "description": "Read your Google Takeout YouTube history locally. Interests, evolution, portrait. Any OpenAI-compatible endpoint.",
   "type": "commonjs",
   "scripts": {
-    "start": "node cli.mjs",
-    "test": "node tests/file-protocol-test.js && node tests/ui-test.js && node tests/openrouter-test.js",
+    "start": "node server.mjs",
+    "server": "node server.mjs",
+    "cli": "node cli.mjs",
+    "test": "node tests/file-protocol-test.js && node tests/ui-test.js && node tests/openrouter-test.js && node tests/proxy-test.js",
     "test:mock": "node tests/run-mock.js",
-    "serve": "node serve.mjs",
     "build": "node build.mjs"
   },
   "devDependencies": {
@@ -21,9 +22,11 @@
     "node": ">=18"
   },
   "files": [
+    "server.mjs",
     "cli.mjs",
+    "index.html",
     "engine/",
-    "serve.mjs",
+    "web/",
     ".env.example",
     "README.md",
     "LICENSE"

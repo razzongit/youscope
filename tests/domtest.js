@@ -3,7 +3,7 @@ const fs = require('fs');
 const APP = process.cwd() + '/';
 
 const dom = new JSDOM('<!doctype html><html><body><div id="host"></div></body></html>', {
-  url: 'http://localhost:8000/',
+  url: 'https://example.test/',   // non-localhost: tests the direct path
   pretendToBeVisual: true,
 });
 const { window } = dom;

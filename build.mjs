@@ -23,6 +23,7 @@ const scripts = [
   'engine/zip.js',
   'web/charts.js',
   'web/portrait.js',
+  'web/settings.js',
   'web/app.js',
 ];
 

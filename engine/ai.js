@@ -170,6 +170,51 @@ Reply with JSON only, matching this shape:
     return null;
   }
 
+  /* When the page is served by server.mjs, route every model call through its
+   * proxy. The key lives on disk and never reaches the browser, which also
+   * removes the CORS and file:// restrictions entirely. */
+  function proxyAvailable() {
+    try {
+      const loc = getLocation();
+      if (!loc) return false;
+      const p = String(loc.protocol || '');
+      if (p !== 'http:' && p !== 'https:') return false;
+      const h = String(loc.hostname || '');
+      return h === 'localhost' || h === '127.0.0.1' || h === '0.0.0.0';
+    } catch (e) { return false; }
+  }
+
+  async function viaProxy(payload, timeoutMs) {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), timeoutMs || 180000);
+    try {
+      const res = await fetch('/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+        signal: ctrl.signal,
+      });
+      clearTimeout(timer);
+      const json = await res.json().catch(() => ({ error: 'Proxy returned a non-JSON response.' }));
+      if (!res.ok) {
+        const err = new Error((json.hint ? json.hint + ' ' : '') + (json.error || 'Request failed'));
+        err.status = res.status;
+        if (res.status === 429) err.isRateLimit = true;
+        throw err;
+      }
+      if (json.content === null || json.content === undefined) {
+        const err = new Error(json.emptyReason || 'The model returned no content.');
+        err.isEmptyResponse = true;
+        throw err;
+      }
+      return { content: json.content, usage: json.usage || null, model: json.model, reasoningTokens: json.reasoningTokens || 0 };
+    } catch (e) {
+      clearTimeout(timer);
+      if (e.name === 'AbortError') throw new Error('Request timed out. Try a faster model or raise the timeout in Settings.');
+      throw e;
+    }
+  }
+
   /* Is this page running from file:// ? That changes what the network allows. */
   function isFileProtocol() {
     const loc = getLocation();
@@ -183,6 +228,18 @@ Reply with JSON only, matching this shape:
     const base = normalizeBase(cfg.baseUrl || preset.base, cfg.provider);
     if (!base) throw new Error('No API base URL configured. Pick a provider, or paste your endpoint\'s base URL (it usually ends in /v1).');
     const model = resolveModel(cfg, preset);
+
+    // Preferred path: local proxy. Handles auth, provider quirks and timeouts
+    // server-side, so nothing secret lives in the page.
+    if (proxyAvailable() && opts.direct !== true) {
+      return viaProxy({
+        messages,
+        maxTokens: opts.maxTokens,
+        temperature: opts.temperature,
+        json: !!opts.json,
+      }, Number(cfg.timeoutMs) || 180000);
+    }
+
     const headers = { 'Content-Type': 'application/json' };
     if (cfg.apiKey) headers['Authorization'] = 'Bearer ' + cfg.apiKey;
     if (/openrouter\.ai/.test(base)) {
@@ -381,5 +438,5 @@ Reply with JSON only, matching this shape:
       .replace(/`([^`]+)`/g, '<code style="font-family:var(--mono);font-size:.9em;opacity:.9">$1</code>');
   }
 
-  return { PRESETS, loadConfig, saveConfig, chat, analyze, extractJson, renderMarkdown, normalizeBase, isFileProtocol, getLocation, checkOpenRouterKey, FREE_FALLBACKS: (typeof self !== "undefined" && self.YSOR && self.YSOR.FALLBACK_CHAIN) || [] };
+  return { PRESETS, loadConfig, saveConfig, chat, analyze, extractJson, renderMarkdown, normalizeBase, isFileProtocol, getLocation, proxyAvailable, checkOpenRouterKey, FREE_FALLBACKS: (typeof self !== "undefined" && self.YSOR && self.YSOR.FALLBACK_CHAIN) || [] };
 });

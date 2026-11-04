@@ -75,6 +75,7 @@
       music: '<path d="M9 18V6l10-2v12"/><circle cx="7" cy="18" r="2"/><circle cx="17" cy="16" r="2"/>',
       search: '<circle cx="11" cy="11" r="7"/><path d="M16 16l4 4"/>',
       portrait: '<path d="M12 3a4 4 0 100 8 4 4 0 000-8zM4 21c0-4 4-6 8-6s8 2 8 6"/>',
+      settings: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 00.3 1.9l.1.1a2 2 0 11-2.8 2.8l-.1-.1a1.7 1.7 0 00-1.9-.3 1.7 1.7 0 00-1 1.5V21a2 2 0 11-4 0v-.1a1.7 1.7 0 00-1.1-1.5 1.7 1.7 0 00-1.9.3l-.1.1a2 2 0 11-2.8-2.8l.1-.1a1.7 1.7 0 00.3-1.9 1.7 1.7 0 00-1.5-1H3a2 2 0 110-4h.1a1.7 1.7 0 001.5-1.1 1.7 1.7 0 00-.3-1.9l-.1-.1a2 2 0 112.8-2.8l.1.1a1.7 1.7 0 001.9.3H9a1.7 1.7 0 001-1.5V3a2 2 0 114 0v.1a1.7 1.7 0 001 1.5 1.7 1.7 0 001.9-.3l.1-.1a2 2 0 112.8 2.8l-.1.1a1.7 1.7 0 00-.3 1.9V9a1.7 1.7 0 001.5 1H21a2 2 0 110 4h-.1a1.7 1.7 0 00-1.5 1z"/>',
     };
     return VIEWS.map(v => `<a href="#${v.id}" data-view="${v.id}" class="${active === v.id ? 'active' : ''}">
       <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">${icons[v.id]}</svg>
@@ -86,7 +87,8 @@
     $('#btn-reset').addEventListener('click', () => { resetAll(); });
     $$('#nav a').forEach(a => a.addEventListener('click', (e) => {
       e.preventDefault();
-      if (!S.profile) return;
+      // Settings must be reachable before any data is loaded.
+      if (!S.profile && a.dataset.view !== 'settings') return;
       location.hash = a.dataset.view;
     }));
   }
@@ -120,7 +122,10 @@
           <div class="card kpi"><div class="label">Evolution</div><div class="value">Q<small>by Q</small></div><div class="foot">Persistent vs rising vs fading, per quarter</div></div>
           <div class="card kpi"><div class="label">Portrait</div><div class="value">AI<small>optional</small></div><div class="foot">Bring your own key, or use the built-in writer</div></div>
         </div>
-        <p class="hint reveal" style="animation-delay:.26s;margin-top:22px;text-align:center">
+        <p class="hint reveal" style="animation-delay:.24s;margin-top:18px;text-align:center">
+          Want the AI portrait too? <a class="link" href="#settings">Connect a model</a> — one key, saved on this machine.
+        </p>
+        <p class="hint reveal" style="animation-delay:.26s;margin-top:14px;text-align:center">
           How to get the file: <a class="link" href="https://takeout.google.com" target="_blank" rel="noopener">takeout.google.com</a>
           → deselect all → tick <b>YouTube and YouTube Music</b> → format <b>HTML</b> → export.
         </p>
@@ -212,6 +217,23 @@
 
   /* ─────────────────────────── views ─────────────────────────── */
   function renderView(id) {
+    // Settings is reachable before any data is loaded — it is the first thing
+    // a new user needs.
+    if (id === 'settings') {
+      mount('settings');
+      $('#nav').innerHTML = navHTML('settings');
+      $$('#nav a').forEach(a => a.addEventListener('click', (e) => { e.preventDefault(); location.hash = a.dataset.view; }));
+      $('#btn-reset').addEventListener('click', resetAll);
+      const m = $('#main');
+      m.innerHTML = topbar('Connect a model', 'YouScope · settings', [
+        { text: window.YSsettings.proxyMode() ? 'local app' : 'opened as file', cls: window.YSsettings.proxyMode() ? 'good' : 'warn' },
+      ]);
+      const host = h('div');
+      m.appendChild(host);
+      window.YSsettings.render(host, () => { /* saved; nothing to reload */ });
+      window.scrollTo({ top: 0, behavior: 'instant' });
+      return;
+    }
     if (!S.profile) return renderLanding();
     const p = S.profile;
     mount(id);
@@ -221,7 +243,8 @@
     $('#btn-reset').addEventListener('click', resetAll);
 
     const views = { overview: viewOverview, interests: viewInterests, evolution: viewEvolution,
-      rhythm: viewRhythm, channels: viewChannels, music: viewMusic, search: viewSearch, portrait: viewPortrait };
+      rhythm: viewRhythm, channels: viewChannels, music: viewMusic, search: viewSearch,
+      portrait: viewPortrait, settings: viewSettings };
     (views[id] || viewOverview)(m, p);
     window.scrollTo({ top: 0, behavior: 'instant' });
   }
@@ -658,6 +681,11 @@
     });
   }
 
+  /* ── SETTINGS ── */
+  function viewSettings(m, p) {
+    window.YSsettings.render(m, () => {});
+  }
+
   /* ─────────────────────────── boot ─────────────────────────── */
   function resetAll() {
     try { sessionStorage.removeItem('youscope.profile'); } catch (e) {}
@@ -693,8 +721,11 @@
     }
 
     window.addEventListener('hashchange', () => {
-      if (!S.profile) return;
       const id = location.hash.slice(1) || 'overview';
+      if (!S.profile) {
+        if (id === 'settings') return renderView('settings');
+        return;
+      }
       if (VIEWS.some(v => v.id === id)) renderView(id);
     });
 

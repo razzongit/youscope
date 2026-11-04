@@ -16,22 +16,51 @@ function ensureWindow(url) {
   global.navigator = window.navigator;
   global.TextDecoder = require('util').TextDecoder;
 
-  // localStorage may be unavailable on opaque origins
-  if (!window.localStorage) {
+  // localStorage throws simply on ACCESS for opaque origins (file://).
+  // It must be probed inside try/catch, not just presence-checked.
+  let lsObj = null;
+  try { lsObj = window.localStorage; } catch (e) { lsObj = null; }
+  if (!lsObj) {
     const mem = {};
-    window.localStorage = {
+    lsObj = {
       getItem: (k) => (k in mem ? mem[k] : null),
       setItem: (k, v) => { mem[k] = String(v); },
       removeItem: (k) => { delete mem[k]; },
     };
+    try { window.localStorage = lsObj; } catch (e) { /* read-only on this origin */ }
   }
-  global.localStorage = window.localStorage;
-  global.sessionStorage = window.sessionStorage;
+  global.localStorage = lsObj;
+  let ssObj = null;
+  try { ssObj = window.sessionStorage; } catch (e) { ssObj = null; }
+  if (!ssObj) {
+    const mem2 = {};
+    ssObj = {
+      getItem: (k) => (k in mem2 ? mem2[k] : null),
+      setItem: (k, v) => { mem2[k] = String(v); },
+      removeItem: (k) => { delete mem2[k]; },
+    };
+    try { window.sessionStorage = ssObj; } catch (e) {}
+  }
+  global.sessionStorage = ssObj;
 
   const nodeFetch = globalThis.fetch;
-  window.fetch = (u, o) => nodeFetch(u, o);
+  // Browsers resolve relative URLs against the page origin; Node does not.
+  // Without this, the proxy path (/api/chat) fails in tests only.
+  window.fetch = (u, o) => {
+    const url = String(u);
+    if (url.startsWith('/')) return nodeFetch((global.__TEST_ORIGIN__ || 'http://127.0.0.1:7777') + url, o);
+    return nodeFetch(u, o);
+  };
   window.Headers = globalThis.Headers;
   window.performance = globalThis.performance || { now: () => Date.now() };
+
+  // Modules call bare `fetch` -> globalThis.fetch. Override it globally so
+  // relative /api/* paths resolve like a browser would.
+  globalThis.fetch = (u, o) => {
+    const url = String(u);
+    if (url.startsWith('/')) return nodeFetch((global.__TEST_ORIGIN__ || 'http://127.0.0.1:7777') + url, o);
+    return nodeFetch(u, o);
+  };
 
   if (!window.YSAI) {
     const root = path.resolve(__dirname, '..');

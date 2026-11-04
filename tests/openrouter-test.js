@@ -1,6 +1,6 @@
 /* Tests the OpenRouter optimisation layer against tests/or-mock.js */
 const { ensureWindow } = require('./env.js');
-const window = ensureWindow('http://localhost:8000/');
+const window = ensureWindow('https://example.test/');  // direct path, not the local proxy
 const AI = window.YSAI;
 const OR = window.YSOR;
 

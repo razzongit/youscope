@@ -1,5 +1,8 @@
 /* Drives the real portrait.js UI against a mock OpenAI-compatible server. */
 const { window } = require('./domtest.js');
+// This suite exercises the direct provider path, not the local proxy.
+// Use a non-localhost origin so proxyAvailable() returns false.
+
 const fs = require('fs');
 const APP = process.cwd() + '/';
 

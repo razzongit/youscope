@@ -2,17 +2,42 @@
 
 **What your watch history actually says about you.**
 
-YouScope reads your Google Takeout export and tells you what you actually care about — your real interests, how they shifted year over year, and a written portrait of the person behind the timeline.
+Drop in your Google Takeout zip. YouScope reads every watch, search and music play, then shows you your real interests, how they shifted year over year, and writes a portrait of the person behind the timeline — in a visual dashboard, not a spreadsheet.
 
-It runs **entirely on your machine**. Your zip is never uploaded. The only network traffic is the model requests you configure yourself.
+It runs **on your own computer**. Nothing is uploaded. No account.
+
+---
+
+## Two ways to use it
+
+### The app (recommended)
+
+For anyone who wants to *see* their history rather than read a terminal.
 
 ```bash
-git clone https://github.com/razzongit/youscope && cd youscope
-cp .env.example .env      # add your endpoint + key
-node cli.mjs ~/Downloads/takeout-*.zip
+git clone https://github.com/razzongit/youscope
+cd youscope
+node server.mjs
 ```
 
-No install step, no dependencies, no build. Node 18+.
+Your browser opens at `http://localhost:7777`. Then:
+
+1. Drop your zip on the page
+2. Look at your dashboard — no key needed
+3. Want the written portrait? Click **Settings**, pick a provider, paste a key once
+4. Press **Save and test**
+
+That's the whole thing. The settings screen has presets for Z.AI, OpenRouter, Gemini, OpenAI, Groq and local Ollama, so you don't need to know what a base URL is.
+
+> **Why a server and not just a file?** A page opened by double-clicking is forbidden by browsers from calling an API, and most providers refuse cross-origin browser requests anyway. The local server solves both, and keeps your key on disk instead of in a browser tab. It listens on `127.0.0.1` only — nothing on your network can reach it.
+
+### The CLI (for scripting)
+
+```bash
+node cli.mjs ~/Downloads/takeout.zip
+```
+
+Writes `.md`, `.html` and `.json` to `./reports`. Same engine, same analysis, no browser. Useful for cron jobs or comparing exports over time.
 
 ---
 
@@ -56,9 +81,11 @@ Don't unzip it. YouScope reads the `.zip` directly, including Google's ZIP64 for
 
 ## Using your own model
 
-Copy `.env.example` to `.env` and fill in three values — base URL, model id, and your key (see `.env.example` for the exact keys and example values per provider).
+**In the app:** Settings → pick a provider → paste your key → Save and test. Saved to `config.json` on this machine, readable only by you.
 
-That's it. **Any OpenAI-compatible endpoint works.** The tool never hardcodes a provider.
+**For the CLI:** copy `.env.example` to `.env` and fill in three values — base URL, model id, and your key.
+
+Either way, **any OpenAI-compatible endpoint works.** The tool never hardcodes a provider.
 
 ```bash
 node cli.mjs --test-connection        # verify before spending anything
